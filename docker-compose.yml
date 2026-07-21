@@ -1,0 +1,68 @@
+version: '3.9'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: teams-task-agent-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    # Uncomment below to expose Redis for local debugging only (bind to localhost for security)
+    # ports:
+    #   - "127.0.0.1:6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  receiver:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: teams-task-agent-receiver
+    command: npm run start:receiver
+    ports:
+      - "${RECEIVER_PORT:-3000}:3000"
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: teams-task-agent-worker
+    command: npm run start:worker
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+    volumes:
+      # IMPORTANT: Nextcloud data bind mount for direct file writes.
+      # The host path (NEXTCLOUD_DATA_DIR_HOST) must match the container path (NEXTCLOUD_DATA_DIR from .env).
+      # For permission handling: the container process (UID 1001 in the image) must be able to read/write
+      # the Nextcloud data directory on the host. This typically requires:
+      #   1. Host files owned by a user/group that the container UID 1001 can access, OR
+      #   2. Files world-readable/writable (not recommended for security), OR
+      #   3. Running the container with --user matching the Nextcloud data directory owner.
+      # If permission errors occur, adjust the container UID in the Dockerfile or use a different mount strategy.
+      - "${NEXTCLOUD_DATA_DIR_HOST:-/var/www/nextcloud/data}:/var/www/nextcloud/data"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local
