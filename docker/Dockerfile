@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for teams-task-agent receiver and worker services
+# Multi-stage Dockerfile for teams-task-agent ingest and worker services
 # Both services use the same image with different entrypoint commands (supplied via docker-compose)
 
 # === Build stage ===
@@ -17,7 +17,6 @@ RUN npm install
 # Copy source code
 COPY tsconfig.json ./
 COPY src ./src
-COPY scripts ./scripts
 
 # Compile TypeScript to JavaScript
 RUN npm run build
@@ -46,8 +45,5 @@ RUN chown -R nodejs:nodejs /app
 # Switch to non-root user
 USER nodejs
 
-# Expose port (actual port is configured via environment variable in runtime)
-EXPOSE 3000
-
 # No CMD or ENTRYPOINT here — the command is supplied via docker-compose's `command:` field
-# This allows both receiver (npm run start:receiver) and worker (npm run start:worker) to use the same image
+# This allows both ingest (npm run start:ingest) and worker (npm run start:worker) to use the same image

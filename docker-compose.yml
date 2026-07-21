@@ -17,27 +17,25 @@ services:
       timeout: 3s
       retries: 5
 
-  receiver:
+  ingest:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: teams-task-agent-receiver
-    command: npm run start:receiver
-    ports:
-      - "${RECEIVER_PORT:-3000}:3000"
+    container_name: teams-task-agent-ingest
+    command: npm run start:ingest
     env_file: .env
     environment:
       - NODE_ENV=production
+    volumes:
+      # Watched drop folder for manually-downloaded files (zips, PDFs, etc.).
+      # The host path (INGEST_WATCH_DIR_HOST) must contain the same files the worker sees, so it
+      # must resolve to the same INGEST_WATCH_DIR path inside both this container and `worker`
+      # below - job data passed through Redis is just a file path, not file contents.
+      - "${INGEST_WATCH_DIR_HOST:-./inbox}:${INGEST_WATCH_DIR:-/app/inbox}"
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health" ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
 
   worker:
     build:
@@ -49,6 +47,9 @@ services:
     environment:
       - NODE_ENV=production
     volumes:
+      # Same watched folder as `ingest` above, mounted at the same in-container path - the
+      # worker reads/moves files by the path the ingest service enqueued.
+      - "${INGEST_WATCH_DIR_HOST:-./inbox}:${INGEST_WATCH_DIR:-/app/inbox}"
       # IMPORTANT: Nextcloud data bind mount for direct file writes.
       # The host path (NEXTCLOUD_DATA_DIR_HOST) must match the container path (NEXTCLOUD_DATA_DIR from .env).
       # For permission handling: the container process (UID 1001 in the image) must be able to read/write

@@ -5,10 +5,10 @@ import { config } from '../config/index.js';
 export const QUEUE_NAME = 'teams-file-jobs';
 
 export interface FileJobData {
-  driveId: string;
-  itemId: string;
-  resourceUrl: string;
-  changeType: string;
+  /** Absolute path to the ingested file on disk, readable by the worker process. */
+  filePath: string;
+  /** Original file name (pre-sanitization), used for display and as the basis of output naming. */
+  originalFileName: string;
   receivedAt: string;
 }
 
