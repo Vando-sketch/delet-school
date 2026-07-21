@@ -1,5 +1,5 @@
 import { Queue } from 'bullmq';
-import IORedis from 'ioredis';
+import { Redis } from 'ioredis';
 import { config } from '../config/index.js';
 
 export const QUEUE_NAME = 'teams-file-jobs';
@@ -12,11 +12,11 @@ export interface FileJobData {
   receivedAt: string;
 }
 
-let connection: IORedis | undefined;
+let connection: Redis | undefined;
 let queue: Queue<FileJobData> | undefined;
 
-export function getRedisConnection(): IORedis {
-  connection ??= new IORedis(config.redis.url, { maxRetriesPerRequest: null });
+export function getRedisConnection(): Redis {
+  connection ??= new Redis(config.redis.url, { maxRetriesPerRequest: null });
   return connection;
 }
 
