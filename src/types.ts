@@ -4,18 +4,6 @@ export interface DownloadedFile {
   content: Buffer;
 }
 
-export interface GraphClient {
-  downloadDriveItem(driveId: string, itemId: string): Promise<DownloadedFile>;
-  createSubscription(input: {
-    resource: string;
-    changeType: string;
-    notificationUrl: string;
-    expirationDateTime: string;
-    clientState?: string;
-  }): Promise<{ id: string; expirationDateTime: string }>;
-  renewSubscription(subscriptionId: string, expirationDateTime: string): Promise<void>;
-}
-
 export interface TaskSolution {
   taskDescription: string;
   proposedSolution: string;
