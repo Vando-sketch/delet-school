@@ -186,12 +186,13 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
 
   return {
     async processFile(file: DownloadedFile): Promise<ProcessedFileResult> {
-      // Fail fast on a missing API key. The Claude Agent SDK spawns a subprocess that
-      // reads ANTHROPIC_API_KEY from the inherited environment itself (we don't pass it
-      // explicitly via `options.env`), so this check doesn't feed the key into the SDK —
-      // it just surfaces a clear error immediately instead of a confusing failure deep
-      // inside the subprocess.
-      config.anthropic.apiKey();
+      // No fail-fast check on ANTHROPIC_API_KEY here: it's optional. The Claude Agent SDK
+      // spawns a subprocess that resolves its own auth (inherited ANTHROPIC_API_KEY, or a
+      // Claude Pro/Max subscription login via `claude login` — see config.anthropic.apiKey
+      // for details) and reports which one it used via `resultMessage.apiKeySource` below.
+      if (!config.anthropic.apiKey()) {
+        logger.info('ANTHROPIC_API_KEY not set; relying on Claude Code subscription login (`claude login`)');
+      }
 
       if (!isPlainTextFile(file)) {
         throw new Error(
@@ -212,6 +213,9 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
         prompt,
         options: {
           systemPrompt: TASK_EXTRACTION_SYSTEM_PROMPT,
+          // Configurable via ANTHROPIC_MODEL (defaults to Haiku — this task is a simple,
+          // high-volume extraction call, not worth a larger model by default).
+          model: config.anthropic.model,
           // No filesystem/bash/etc. access needed — we embed the file text directly in
           // the prompt and only want a structured JSON response back.
           tools: [],
@@ -219,6 +223,9 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
           outputFormat: { type: 'json_schema', schema: RESULT_JSON_SCHEMA },
         },
       })) {
+        if (message.type === 'system' && message.subtype === 'init') {
+          logger.info({ fileName: file.fileName, apiKeySource: message.apiKeySource }, 'Claude Agent SDK session started');
+        }
         if (message.type === 'result') {
           resultMessage = message;
         }

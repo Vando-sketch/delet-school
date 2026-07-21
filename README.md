@@ -42,6 +42,8 @@ Required Azure AD app registration: client-credentials flow, `Files.Read.All` or
 
 The webhook receiver must be publicly reachable for Microsoft to call it (e.g. via a Cloudflare Tunnel or Tailscale Funnel) — the "no public access needed" part of the architecture applies only to the Nextcloud write step, which happens locally on the worker's host.
 
+`ANTHROPIC_API_KEY` is optional: the Claude Agent SDK subprocess can instead authenticate via a Claude Pro/Max subscription login (`claude login` in the worker's environment), which draws from subscription rate limits rather than separate API credits. `ANTHROPIC_MODEL` is also optional (defaults to Haiku, since task extraction is a simple, high-volume call).
+
 ## Commands
 
 - `npm run typecheck` / `npm run lint` / `npm test` — must all pass before opening a PR (see `CLAUDE.md`).

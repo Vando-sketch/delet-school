@@ -27,7 +27,12 @@ export const config = {
     notificationUrl: () => required('GRAPH_NOTIFICATION_URL'),
   },
   anthropic: {
-    apiKey: () => required('ANTHROPIC_API_KEY'),
+    // No fallback default: leaving ANTHROPIC_API_KEY unset is valid and expected when the
+    // Claude Agent SDK subprocess is authenticated via a Claude Pro/Max subscription login
+    // (`claude login`) instead of API billing. The SDK subprocess inherits process.env and
+    // resolves its own auth source; we don't require a key here.
+    apiKey: (): string | undefined => process.env.ANTHROPIC_API_KEY,
+    model: optional('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001'),
   },
   nextcloud: {
     dataDir: () => required('NEXTCLOUD_DATA_DIR'),
