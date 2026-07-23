@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { Worker, type Job } from 'bullmq';
 import pino from 'pino';
 import { QUEUE_NAME, getRedisConnection, type FileJobData } from '../queue/index.js';
@@ -38,9 +38,13 @@ async function handleJob(job: Job<FileJobData>): Promise<void> {
   const { filePath, originalFileName } = job.data;
   logger.info({ jobId: job.id, filePath, originalFileName }, 'processing file job');
 
+  // Kept inside watchDir (in the same ignored staging subfolder the ingest watcher uses for
+  // zip extraction) rather than os.tmpdir(), so it's on the same filesystem/device as the
+  // archive destinations - fs.rename() in archiveFile() can't cross a device boundary (EXDEV).
+  const workDir = path.join(path.resolve(config.ingest.watchDir), config.ingest.stagingDirName, randomUUID());
   let archivalPath = filePath;
   try {
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'extract-'));
+    await fs.mkdir(workDir, { recursive: true });
     const extraction = await extractFile(filePath, workDir);
     archivalPath = extraction.archivalPdfPath;
 
@@ -64,6 +68,10 @@ async function handleJob(job: Job<FileJobData>): Promise<void> {
       logger.error({ archiveErr, filePath: archivalPath }, 'Failed to archive file after processing failure');
     });
     throw err;
+  } finally {
+    // Always clean up the scratch dir (OCR output, vision-fallback page images), whether the
+    // job succeeded, failed, or archiving failed - it's created fresh per job and never reused.
+    await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

@@ -5,16 +5,16 @@ const buildSolutionMarkdown = vi.fn();
 const renderSolutionPdf = vi.fn();
 const processFile = vi.fn();
 const writeResult = vi.fn();
-const mkdtemp = vi.fn();
 const mkdir = vi.fn();
 const rename = vi.fn();
 const rmdir = vi.fn();
 const rm = vi.fn();
+const randomUUID = vi.fn();
 
 vi.mock('node:fs', () => ({
-  promises: { mkdtemp, mkdir, rename, rmdir, rm },
+  promises: { mkdir, rename, rmdir, rm },
 }));
-vi.mock('node:os', () => ({ tmpdir: () => '/tmp' }));
+vi.mock('node:crypto', () => ({ randomUUID }));
 vi.mock('../src/extract/index.js', () => ({ extractFile }));
 vi.mock('../src/pdf/buildMarkdown.js', () => ({ buildSolutionMarkdown }));
 vi.mock('../src/pdf/renderPdf.js', () => ({ renderSolutionPdf }));
@@ -49,7 +49,7 @@ const MATERIAL_RESULT = {
 describe('worker pipeline', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mkdtemp.mockResolvedValue('/tmp/job-abc123');
+    randomUUID.mockReturnValue('job-abc123');
     mkdir.mockResolvedValue(undefined);
     rename.mockResolvedValue(undefined);
     rmdir.mockResolvedValue(undefined);
@@ -71,7 +71,7 @@ describe('worker pipeline', () => {
     const job = { id: '1', data: { filePath: '/inbox/arbeitsblatt1.pdf', originalFileName: 'arbeitsblatt1.pdf', receivedAt: 'now' } };
     await handler(job);
 
-    expect(extractFile).toHaveBeenCalledWith('/inbox/arbeitsblatt1.pdf', '/tmp/job-abc123');
+    expect(extractFile).toHaveBeenCalledWith('/inbox/arbeitsblatt1.pdf', '/inbox/.staging/job-abc123');
     expect(processFile).toHaveBeenCalledWith('arbeitsblatt1.pdf', expect.objectContaining({ markdown: '# text' }));
     expect(buildSolutionMarkdown).toHaveBeenCalledWith(AUFGABENBLATT_RESULT, expect.any(String));
     expect(renderSolutionPdf).toHaveBeenCalledWith('# solution markdown');
@@ -86,10 +86,15 @@ describe('worker pipeline', () => {
     const [movedFrom, movedTo] = rename.mock.calls[0] as [string, string];
     expect(movedFrom).toBe('/inbox/arbeitsblatt1.pdf');
     expect(movedTo).toMatch(/[/\\]\.processed[/\\]\d+-arbeitsblatt1\.pdf$/);
+
+    // The per-job scratch dir (created on the same filesystem as watchDir, not os.tmpdir())
+    // is unconditionally removed once the job finishes, success or failure.
+    expect(mkdir).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true });
+    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
   });
 
   it('archives the OCR\'d searchable PDF (not the raw scan) when extraction ran OCR', async () => {
-    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: true, archivalPdfPath: '/tmp/job-abc123/ocr.pdf' });
+    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: true, archivalPdfPath: '/inbox/.staging/job-abc123/ocr.pdf' });
     processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
     buildSolutionMarkdown.mockReturnValue('# solution markdown');
     renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
@@ -104,7 +109,12 @@ describe('worker pipeline', () => {
     await handler(job);
 
     const [movedFrom] = rename.mock.calls[0] as [string, string];
-    expect(movedFrom).toBe('/tmp/job-abc123/ocr.pdf');
+    expect(movedFrom).toBe('/inbox/.staging/job-abc123/ocr.pdf');
+
+    // The scratch dir the OCR'd PDF lived in is removed after archiveFile has moved it out -
+    // this is the case archiveFile's own best-effort rmdir can silently fail on (non-recursive,
+    // vision-pages/ subfolder), so the unconditional recursive fs.rm must cover it.
+    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
   });
 
   it('skips PDF generation and writes the archival source directly for a Materialblatt', async () => {
@@ -144,6 +154,9 @@ describe('worker pipeline', () => {
     expect(writeResult).not.toHaveBeenCalled();
     const [, movedTo] = rename.mock.calls[0] as [string, string];
     expect(movedTo).toMatch(/[/\\]\.failed[/\\]\d+-arbeitsblatt1\.pdf$/);
+
+    // Scratch dir cleanup runs even on the failure path, after the failed-dir archive attempt.
+    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
   });
 
   it('cleans up a zip-extraction staging directory after archiving the file it contained', async () => {
