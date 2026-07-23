@@ -34,6 +34,12 @@ async function archiveFile(filePath: string, dirName: string): Promise<void> {
   }
 }
 
+async function removeOriginalIfArchivedElsewhere(filePath: string, archivalPath: string): Promise<void> {
+  if (archivalPath !== filePath) {
+    await fs.rm(filePath, { force: true }).catch(() => undefined);
+  }
+}
+
 async function handleJob(job: Job<FileJobData>): Promise<void> {
   const { filePath, originalFileName } = job.data;
   logger.info({ jobId: job.id, filePath, originalFileName }, 'processing file job');
@@ -62,11 +68,13 @@ async function handleJob(job: Job<FileJobData>): Promise<void> {
 
     const { writtenPath } = await nextcloudWriter.writeResult(result, content, datum);
     await archiveFile(archivalPath, config.ingest.processedDirName);
+    await removeOriginalIfArchivedElsewhere(filePath, archivalPath);
     logger.info({ jobId: job.id, writtenPath, tasksFound: result.tasksFound.length }, 'file job complete');
   } catch (err) {
     await archiveFile(archivalPath, config.ingest.failedDirName).catch((archiveErr: unknown) => {
       logger.error({ archiveErr, filePath: archivalPath }, 'Failed to archive file after processing failure');
     });
+    await removeOriginalIfArchivedElsewhere(filePath, archivalPath);
     throw err;
   } finally {
     // Always clean up the scratch dir (OCR output, vision-fallback page images), whether the

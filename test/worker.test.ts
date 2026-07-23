@@ -91,6 +91,10 @@ describe('worker pipeline', () => {
     // is unconditionally removed once the job finishes, success or failure.
     expect(mkdir).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true });
     expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
+
+    // archivalPath === filePath here (no OCR ran), so archiveFile's rename already moved the
+    // original - the removeOriginalIfArchivedElsewhere helper must be a no-op for this path.
+    expect(rm).not.toHaveBeenCalledWith('/inbox/arbeitsblatt1.pdf', { force: true });
   });
 
   it('archives the OCR\'d searchable PDF (not the raw scan) when extraction ran OCR', async () => {
@@ -115,6 +119,12 @@ describe('worker pipeline', () => {
     // this is the case archiveFile's own best-effort rmdir can silently fail on (non-recursive,
     // vision-pages/ subfolder), so the unconditional recursive fs.rm must cover it.
     expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
+
+    // archivalPath (the OCR'd PDF) differs from the original job filePath, so the raw scan
+    // left behind at the watch-dir root must also be removed - otherwise it re-triggers the
+    // chokidar `add` event (ignoreInitial: false) on every ingest/worker restart and gets
+    // re-OCR'd, re-solved, and re-written forever.
+    expect(rm).toHaveBeenCalledWith('/inbox/scan.pdf', { force: true });
   });
 
   it('skips PDF generation and writes the archival source directly for a Materialblatt', async () => {
