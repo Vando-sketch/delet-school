@@ -54,7 +54,7 @@ async function handleJob(job: Job<FileJobData>): Promise<void> {
     const extraction = await extractFile(filePath, workDir);
     archivalPath = extraction.archivalPdfPath;
 
-    const result = await fileProcessor.processFile(originalFileName, extraction);
+    const result = await fileProcessor.processFile(originalFileName, extraction, job.data.siblingManifest);
     const datum = today();
 
     let content: NextcloudWriteContent;

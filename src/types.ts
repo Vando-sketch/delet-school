@@ -28,8 +28,18 @@ export interface ExtractionResult {
   archivalPdfPath: string;
 }
 
+/** A lightweight excerpt of one sibling file from the same ingest batch, for classification context. */
+export interface SiblingManifestEntry {
+  fileName: string;
+  excerpt: string;
+}
+
 export interface FileProcessor {
-  processFile(fileName: string, extraction: ExtractionResult): Promise<ProcessedFileResult>;
+  processFile(
+    fileName: string,
+    extraction: ExtractionResult,
+    siblings?: SiblingManifestEntry[],
+  ): Promise<ProcessedFileResult>;
 }
 
 export type NextcloudWriteContent = { kind: 'pdf'; bytes: Buffer } | { kind: 'material'; sourcePath: string };
