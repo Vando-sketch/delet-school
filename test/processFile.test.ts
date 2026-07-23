@@ -167,6 +167,82 @@ describe('createFileProcessor', () => {
     await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/received no result/);
   });
 
+  it('includes sibling filenames and excerpts in the prompt when siblings are provided', async () => {
+    let capturedPrompt: unknown;
+    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
+      capturedPrompt = params.prompt;
+      yield makeResultMessage({
+        subtype: 'success',
+        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
+        structured_output: VALID_STRUCTURED_OUTPUT,
+      });
+    }
+
+    const processor = createFileProcessor({ queryFn: fakeQuery });
+    await processor.processFile('arbeitsblatt1.pdf', makeExtraction(), [
+      { fileName: 'lieferant-a.pdf', excerpt: 'Fachbereich IT/Elektrotechnik - Angebot Lieferant A' },
+      { fileName: 'vorlage.docx', excerpt: 'Lieferant: | Lieferant: | Lieferant:' },
+    ]);
+
+    expect(typeof capturedPrompt).toBe('string');
+    const prompt = capturedPrompt as string;
+    expect(prompt).toContain('lieferant-a.pdf');
+    expect(prompt).toContain('Fachbereich IT/Elektrotechnik - Angebot Lieferant A');
+    expect(prompt).toContain('vorlage.docx');
+    expect(prompt).toContain('Lieferant: | Lieferant: | Lieferant:');
+  });
+
+  it('wraps each sibling excerpt in a <sibling_file> tag, mirroring the <file_content> wrapper on the primary file', async () => {
+    let capturedPrompt: unknown;
+    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
+      capturedPrompt = params.prompt;
+      yield makeResultMessage({
+        subtype: 'success',
+        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
+        structured_output: VALID_STRUCTURED_OUTPUT,
+      });
+    }
+
+    const processor = createFileProcessor({ queryFn: fakeQuery });
+    await processor.processFile('arbeitsblatt1.pdf', makeExtraction(), [
+      { fileName: 'lieferant-a.pdf', excerpt: 'some excerpt text' },
+    ]);
+
+    const prompt = capturedPrompt as string;
+    expect(prompt).toContain('<sibling_file name="lieferant-a.pdf">\nsome excerpt text\n</sibling_file>');
+  });
+
+  it('produces a prompt byte-identical to the no-siblings case when siblings is an empty array', async () => {
+    let promptWithoutArg: unknown;
+    let promptWithEmptyArray: unknown;
+
+    async function* succeed(): AsyncGenerator<SDKMessage> {
+      yield makeResultMessage({
+        subtype: 'success',
+        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
+        structured_output: VALID_STRUCTURED_OUTPUT,
+      });
+    }
+
+    const processor1 = createFileProcessor({
+      queryFn: async function* (params) {
+        promptWithoutArg = params.prompt;
+        yield* succeed();
+      },
+    });
+    await processor1.processFile('arbeitsblatt1.pdf', makeExtraction());
+
+    const processor2 = createFileProcessor({
+      queryFn: async function* (params) {
+        promptWithEmptyArray = params.prompt;
+        yield* succeed();
+      },
+    });
+    await processor2.processFile('arbeitsblatt1.pdf', makeExtraction(), []);
+
+    expect(promptWithEmptyArray).toBe(promptWithoutArg);
+  });
+
   it('returns isMaterialblatt=true with an empty tasksFound for reference material', async () => {
     const materialOutput = { isMaterialblatt: true, fach: 'Deutsch', thema: 'Grammatikregeln', tasksFound: [] };
     async function* fakeQuery(): AsyncGenerator<SDKMessage> {
