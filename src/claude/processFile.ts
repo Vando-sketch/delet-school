@@ -3,7 +3,14 @@ import { query as sdkQuery, type Options, type SDKMessage, type SDKUserMessage }
 import pino from 'pino';
 import { config } from '../config/index.js';
 import { FACH_KEYS, type FachKey } from '../fach.js';
-import type { ExtractionResult, FileProcessor, ProcessedFileResult, TaskSolution, VisionPage } from '../types.js';
+import type {
+  ExtractionResult,
+  FileProcessor,
+  ProcessedFileResult,
+  SiblingManifestEntry,
+  TaskSolution,
+  VisionPage,
+} from '../types.js';
 
 const logger = pino({ name: 'claude-file-processor' });
 
@@ -29,6 +36,29 @@ Bestimme das Fach über den festen Fach-Schlüssel (siehe Enum im Schema). Bilde
 synonyme Bezeichnungen aggressiv auf den passenden festen Schlüssel ab (z.B. "Mathe" oder
 "Informationstechnik" auf den nächstliegenden Eintrag), statt eine Abweichung als
 unklassifizierbar zu behandeln. Wenn wirklich kein Schlüssel passt, verwende "_Unsortiert".
+
+Falls Auszüge weiterer Dateien aus demselben Export-Batch mitgeliefert werden ("Diese Datei
+stammt aus demselben Export-Batch..." unten im Prompt), nutze diese als Kontext, um die
+Fach-Klassifizierung über den Batch hinweg konsistent zu halten: Wenn eine Batch-Datei ein
+explizites Signal für das Fach enthält (z.B. eine wörtlich identische Kopfzeile oder einen
+Fachbereich-Hinweis) und die aktuelle Datei dasselbe Signal teilt oder selbst kein eindeutiges
+Signal hat, klassifiziere konsistent mit dem restlichen Batch statt unabhängig zu raten. Das gilt
+mit besonderer Strenge für die leicht verwechselten Schlüssel "IT" und "IT-Tec" (historisch
+häufig fälschlich uneinheitlich vergeben): sie bleiben zwei getrennte, eigenständige Fächer -
+nicht zusammenlegen -, aber wenn mehrere Dateien im selben Batch dieselbe wörtliche
+Kopfzeile/denselben Fachbereich-Hinweis (z.B. "Fachbereich IT/Elektrotechnik") teilen, MÜSSEN sie
+alle denselben Fach-Schlüssel erhalten. Das ist eine harte Regel, keine Kann-Empfehlung: lass
+niemals zwei Dateien mit wörtlich identischem Kopfzeilentext in unterschiedlichen Fächern landen.
+
+Erkenne eine leere Ausfüll-"Vorlage" (z.B. eine Vergleichstabelle mit Kopfzeilen wie
+"Lieferant: | Lieferant: | Lieferant:" und leeren Zellen, eine Entscheidungsmatrix, oder leere
+Linien "____" für eine Begründung) als implizite Aufgabe, auch ganz ohne explizites
+"Aufgabe:"-Wort im Text. Wenn Batch-Dateien die zum Ausfüllen nötigen Daten enthalten (z.B.
+Angebote, Kennzahlen oder Fakten in Geschwisterdateien desselben Batches), behandle die Vorlage
+als lösbare Aufgabe: setze "isMaterialblatt" auf false und liefere in "tasksFound" eine Aufgabe,
+deren "proposedSolution" die vollständig ausgefüllte Tabelle/Vorlage mit den Angaben aus den
+Batch-Dateien ist. Nur wenn wirklich keine Daten zum Ausfüllen verfügbar sind (auch nicht im
+Batch-Kontext), bleibt es ein Materialblatt mit leerem "tasksFound".
 
 Falls Seitenbilder mitgeliefert werden (Vision-Fallback für schlecht lesbare/handschriftliche
 Seiten), sind diese Bilder für die jeweilige Seite maßgeblich - ignoriere dafür etwaigen
@@ -67,16 +97,27 @@ const RESULT_JSON_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-function buildPromptText(fileName: string, extraction: ExtractionResult): string {
+function buildSiblingContextSection(siblings: SiblingManifestEntry[] | undefined): string {
+  if (!siblings || siblings.length === 0) return '';
+  const entries = siblings
+    .map((sibling) => `### ${sibling.fileName}\n${sibling.excerpt}`)
+    .join('\n\n');
+  return `\n\nDiese Datei stammt aus demselben Export-Batch wie die folgenden weiteren Dateien. Nutze deren Inhalt als Kontext, um das Fach konsistent mit dem restlichen Batch zu bestimmen, und um ggf. fehlende Angaben (z.B. in einer leeren Vergleichstabelle) aus den Angaben in diesen Dateien zu ergänzen:
+
+${entries}`;
+}
+
+function buildPromptText(fileName: string, extraction: ExtractionResult, siblings?: SiblingManifestEntry[]): string {
   const visionNote =
     extraction.visionPages.length > 0
       ? `\n\nHinweis: Für die Seite(n) ${extraction.visionPages.map((p) => p.pageNumber).join(', ')} sind Bilder beigefügt - nutze diese als Quelle, nicht den Markdown-Text für diese Seiten.`
       : '';
+  const siblingSection = buildSiblingContextSection(siblings);
   return `Hier ist der extrahierte Inhalt der Datei "${fileName}":
 
 <file_content>
 ${extraction.markdown}
-</file_content>${visionNote}
+</file_content>${visionNote}${siblingSection}
 
 Analysiere den Inhalt und antworte mit dem im Schema beschriebenen JSON.`;
 }
@@ -169,12 +210,16 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
   const readImageFile: ReadImageFileFn = options.readImageFile ?? ((path: string) => fsReadFile(path));
 
   return {
-    async processFile(fileName: string, extraction: ExtractionResult): Promise<ProcessedFileResult> {
+    async processFile(
+      fileName: string,
+      extraction: ExtractionResult,
+      siblings?: SiblingManifestEntry[],
+    ): Promise<ProcessedFileResult> {
       if (!config.anthropic.apiKey()) {
         logger.info('ANTHROPIC_API_KEY not set; relying on Claude Code subscription login (`claude login`)');
       }
 
-      const promptText = buildPromptText(fileName, extraction);
+      const promptText = buildPromptText(fileName, extraction, siblings);
       const prompt: string | AsyncIterable<SDKUserMessage> =
         extraction.visionPages.length > 0 ? buildVisionPrompt(promptText, extraction.visionPages, readImageFile) : promptText;
 
