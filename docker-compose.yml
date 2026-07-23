@@ -1,15 +1,46 @@
 version: '3.9'
 
 services:
+  tailscale:
+    build:
+      context: .
+      dockerfile: docker/tailscale/Dockerfile
+    container_name: teams-task-agent-tailscale
+    hostname: ${TS_HOSTNAME:-teams-task-agent}
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_EXTRA_ARGS=--advertise-tags=tag:teams-task-agent
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TAILDROP_STAGING_DIR=${TAILDROP_STAGING_DIR:-/taildrop-staging}
+      - TAILDROP_POLL_INTERVAL_MS=${TAILDROP_POLL_INTERVAL_MS:-5000}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - taildrop-staging:${TAILDROP_STAGING_DIR:-/taildrop-staging}
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "tailscale", "status", "--json" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
   redis:
     image: redis:7-alpine
     container_name: teams-task-agent-redis
     command: redis-server --appendonly yes
+    # Shares the tailscale sidecar's network namespace (see the `ingest`/`worker` comment
+    # below) - reached at localhost:6379 from there, not via Compose's `redis` DNS name.
+    network_mode: "service:tailscale"
     volumes:
       - redis-data:/data
-    # Uncomment below to expose Redis for local debugging only (bind to localhost for security)
-    # ports:
-    #   - "127.0.0.1:6379:6379"
+    depends_on:
+      tailscale:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
@@ -26,13 +57,23 @@ services:
     env_file: .env
     environment:
       - NODE_ENV=production
+    # Shares the tailscale sidecar's network namespace so MagicDNS/tailnet routing works
+    # without installing or configuring Tailscale in this image directly. This also means
+    # REDIS_URL must point at localhost (see .env.example), not a Compose service name -
+    # Compose's embedded DNS isn't reachable once MagicDNS owns /etc/resolv.conf here.
+    network_mode: "service:tailscale"
     volumes:
       # Watched drop folder for manually-downloaded files (zips, PDFs, etc.).
       # The host path (INGEST_WATCH_DIR_HOST) must contain the same files the worker sees, so it
       # must resolve to the same INGEST_WATCH_DIR path inside both this container and `worker`
       # below - job data passed through Redis is just a file path, not file contents.
       - "${INGEST_WATCH_DIR_HOST:-./inbox}:${INGEST_WATCH_DIR:-/app/inbox}"
+      # Taildrop's landing directory (drained by the tailscale sidecar) - the taildropDrain
+      # module in this container moves files from here into INGEST_WATCH_DIR above.
+      - taildrop-staging:${TAILDROP_STAGING_DIR:-/taildrop-staging}
     depends_on:
+      tailscale:
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -46,24 +87,20 @@ services:
     env_file: .env
     environment:
       - NODE_ENV=production
+    network_mode: "service:tailscale"
     volumes:
-      # Same watched folder as `ingest` above, mounted at the same in-container path - the
-      # worker reads/moves files by the path the ingest service enqueued.
       - "${INGEST_WATCH_DIR_HOST:-./inbox}:${INGEST_WATCH_DIR:-/app/inbox}"
-      # IMPORTANT: Nextcloud data bind mount for direct file writes.
-      # The host path (NEXTCLOUD_DATA_DIR_HOST) must match the container path (NEXTCLOUD_DATA_DIR from .env).
-      # For permission handling: the container process (UID 1001 in the image) must be able to read/write
-      # the Nextcloud data directory on the host. This typically requires:
-      #   1. Host files owned by a user/group that the container UID 1001 can access, OR
-      #   2. Files world-readable/writable (not recommended for security), OR
-      #   3. Running the container with --user matching the Nextcloud data directory owner.
-      # If permission errors occur, adjust the container UID in the Dockerfile or use a different mount strategy.
-      - "${NEXTCLOUD_DATA_DIR_HOST:-/var/www/nextcloud/data}:/var/www/nextcloud/data"
     depends_on:
+      tailscale:
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
   redis-data:
+    driver: local
+  tailscale-state:
+    driver: local
+  taildrop-staging:
     driver: local
