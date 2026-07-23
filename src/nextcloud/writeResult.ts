@@ -1,23 +1,22 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import pino from 'pino';
+import { createClient, type WebDAVClient } from 'webdav';
 import { config } from '../config/index.js';
 import { FACH_SUBPATH } from '../fach.js';
-import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
 import type { NextcloudWriteContent, NextcloudWriter, ProcessedFileResult } from '../types.js';
-
-const logger = pino({ name: 'nextcloud-writer' });
 
 const RESULT_ROOT = 'Fächer';
 const MATERIAL_SUBDIRNAME = 'Material';
 
+type NextcloudWebDAVClient = Pick<WebDAVClient, 'createDirectory' | 'putFileContents'>;
+
 export interface NextcloudWriterDeps {
-  execFile?: ExecFileFn;
+  webdavClient?: NextcloudWebDAVClient;
 }
 
 /**
  * Neutralizes path separators and parent-directory traversal sequences. `originalFileName`
- * and `lernfeld` are not trusted to be safe for direct filesystem-path construction (e.g.
+ * and `lernfeld` are not trusted to be safe for direct path construction (e.g.
  * `../../etc/passwd` or `foo/bar.txt`).
  */
 function sanitizePathSegment(name: string): string {
@@ -51,35 +50,37 @@ function deriveFileName(result: ProcessedFileResult, content: NextcloudWriteCont
   return `${finalStem}_${datum}${materialExt}`;
 }
 
+/**
+ * `createDirectory(path, { recursive: true })` from the `webdav` package already stats each
+ * path segment before creating it, so it's idempotent against an already-existing folder on
+ * its own. This cache only avoids repeating that network round trip for every file written
+ * into a Fach folder that's already been confirmed to exist earlier in the same process.
+ */
 export function createNextcloudWriter(deps: NextcloudWriterDeps = {}): NextcloudWriter {
-  const execFile = deps.execFile ?? defaultExecFile;
+  const client: NextcloudWebDAVClient =
+    deps.webdavClient ??
+    createClient(`${config.nextcloud.baseUrl()}/remote.php/dav/files/${config.nextcloud.username()}`, {
+      username: config.nextcloud.username(),
+      password: config.nextcloud.appPassword(),
+    });
+  const knownDirs = new Set<string>();
 
   return {
     async writeResult(result, content, datum) {
-      const targetUser = config.nextcloud.targetUser();
       const dirParts = deriveTargetDir(result);
-      const targetDir = path.join(config.nextcloud.dataDir(), targetUser, 'files', ...dirParts);
+      const targetDir = `/${dirParts.join('/')}`;
       const fileName = deriveFileName(result, content, datum);
-      const writtenPath = path.join(targetDir, fileName);
+      const writtenPath = `${targetDir}/${fileName}`;
 
-      const resolvedTargetDir = path.resolve(targetDir);
-      const resolvedWrittenPath = path.resolve(writtenPath);
-      if (resolvedWrittenPath !== resolvedTargetDir && !resolvedWrittenPath.startsWith(resolvedTargetDir + path.sep)) {
-        throw new Error(`Refusing to write outside of target directory: ${writtenPath}`);
+      if (!knownDirs.has(targetDir)) {
+        await client.createDirectory(targetDir, { recursive: true });
+        knownDirs.add(targetDir);
       }
 
-      await fs.mkdir(targetDir, { recursive: true });
-      if (content.kind === 'pdf') {
-        await fs.writeFile(writtenPath, content.bytes);
-      } else {
-        await fs.copyFile(content.sourcePath, writtenPath);
-      }
-
-      const scanPath = `/${targetUser}/files/${dirParts.join('/')}`;
-      try {
-        await execFile(config.nextcloud.occBinary, ['files:scan', `--path=${scanPath}`]);
-      } catch (err) {
-        logger.error({ err, scanPath }, 'occ files:scan failed after writing Nextcloud result file');
+      const bytes = content.kind === 'pdf' ? content.bytes : await fs.readFile(content.sourcePath);
+      const ok = await client.putFileContents(writtenPath, bytes);
+      if (ok === false) {
+        throw new Error(`nextcloud/writeResult: failed to upload "${writtenPath}" via WebDAV`);
       }
 
       return { writtenPath };
