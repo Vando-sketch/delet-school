@@ -1,18 +1,13 @@
 import { promises as fs } from 'node:fs';
-import { execFile as execFileCallback } from 'node:child_process';
 import * as path from 'node:path';
-import { promisify } from 'node:util';
 import pino from 'pino';
+import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
 import { config } from '../config/index.js';
 import type { NextcloudWriter } from '../types.js';
 
 const logger = pino({ name: 'nextcloud-writer' });
 
 const RESULT_SUBFOLDER = 'teams-task-agent';
-
-type ExecFileFn = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
-
-const defaultExecFile: ExecFileFn = promisify(execFileCallback);
 
 export interface NextcloudWriterDeps {
   /**
