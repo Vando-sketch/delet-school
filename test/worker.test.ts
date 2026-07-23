@@ -72,7 +72,7 @@ describe('worker pipeline', () => {
     await handler(job);
 
     expect(extractFile).toHaveBeenCalledWith('/inbox/arbeitsblatt1.pdf', '/inbox/.staging/job-abc123');
-    expect(processFile).toHaveBeenCalledWith('arbeitsblatt1.pdf', expect.objectContaining({ markdown: '# text' }));
+    expect(processFile).toHaveBeenCalledWith('arbeitsblatt1.pdf', expect.objectContaining({ markdown: '# text' }), undefined);
     expect(buildSolutionMarkdown).toHaveBeenCalledWith(AUFGABENBLATT_RESULT, expect.any(String));
     expect(renderSolutionPdf).toHaveBeenCalledWith('# solution markdown');
     expect(writeResult).toHaveBeenCalledWith(
@@ -183,5 +183,31 @@ describe('worker pipeline', () => {
     await handler(job);
 
     expect(rmdir).toHaveBeenCalledWith('/inbox/.staging/uuid-1');
+  });
+
+  it('passes the job\'s siblingManifest through to the file processor when present', async () => {
+    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/.staging/uuid-2/a.txt' });
+    processFile.mockResolvedValue({ ...MATERIAL_RESULT, originalFileName: 'a.txt' });
+    writeResult.mockResolvedValue({ writtenPath: '/data/x.txt' });
+
+    const { createFileJobWorker } = await import('../src/worker/index.js');
+    const { Worker } = await import('bullmq');
+    createFileJobWorker();
+
+    const siblingManifest = [{ fileName: 'b.txt', excerpt: 'content of b' }];
+    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+    const job = {
+      id: '1',
+      data: {
+        filePath: '/inbox/.staging/uuid-2/a.txt',
+        originalFileName: 'a.txt',
+        receivedAt: 'now',
+        batchId: 'batch-1',
+        siblingManifest,
+      },
+    };
+    await handler(job);
+
+    expect(processFile).toHaveBeenCalledWith('a.txt', expect.objectContaining({ markdown: '# text' }), siblingManifest);
   });
 });

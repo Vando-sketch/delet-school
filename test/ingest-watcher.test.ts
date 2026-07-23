@@ -45,6 +45,11 @@ describe('createIngestWatcher', () => {
       'process-file',
       expect.objectContaining({ filePath: path.join(tmpDir, 'notes.md'), originalFileName: 'notes.md' }),
     );
+
+    // A lone file dropped directly (not from a zip) has no batch to share context with.
+    const [, jobData] = add.mock.calls[0] as [string, Record<string, unknown>];
+    expect(jobData.batchId).toBeUndefined();
+    expect(jobData.siblingManifest).toBeUndefined();
   });
 
   it('extracts a dropped zip, enqueues one job per contained file, and archives the zip', async () => {
@@ -74,6 +79,65 @@ describe('createIngestWatcher', () => {
     const processedEntries = await fs.readdir(processedDir);
     expect(processedEntries).toHaveLength(1);
     expect(processedEntries[0]).toMatch(/export\.zip$/);
+  });
+
+  it('gives every file from the same zip a shared batchId and a sibling manifest excluding itself', async () => {
+    const add = vi.fn().mockResolvedValue(undefined);
+    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
+    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
+
+    const zip = new AdmZip();
+    zip.addFile('a.txt', Buffer.from('content of a'));
+    zip.addFile('b.txt', Buffer.from('content of b'));
+    zip.addFile('c.txt', Buffer.from('content of c'));
+    const zipPath = path.join(tmpDir, 'export.zip');
+    zip.writeZip(zipPath);
+
+    await waitFor(() => add.mock.calls.length >= 3);
+
+    const calls = add.mock.calls as [string, { originalFileName: string; batchId?: string; siblingManifest?: { fileName: string; excerpt: string }[] }][];
+    const jobsByName = new Map(calls.map(([, data]) => [data.originalFileName, data]));
+
+    const batchIds = new Set(calls.map(([, data]) => data.batchId));
+    expect(batchIds.size).toBe(1);
+    const [batchId] = [...batchIds];
+    expect(batchId).toBeTruthy();
+
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+      const job = jobsByName.get(name);
+      expect(job?.siblingManifest).toBeDefined();
+      const siblingNames = (job?.siblingManifest ?? []).map((s) => s.fileName).sort();
+      expect(siblingNames).toEqual(['a.txt', 'b.txt', 'c.txt'].filter((n) => n !== name));
+    }
+
+    const aManifest = jobsByName.get('a.txt')?.siblingManifest ?? [];
+    const bEntry = aManifest.find((s) => s.fileName === 'b.txt');
+    expect(bEntry?.excerpt).toBe('content of b');
+  });
+
+  it('bounds a job\'s total sibling-excerpt characters instead of embedding every other file in full', async () => {
+    const add = vi.fn().mockResolvedValue(undefined);
+    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
+    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
+
+    // 7 files, each with a full-cap (4000 char) excerpt: 6 siblings per job would be 24,000
+    // combined chars - over the 20,000 per-job budget - so at least one sibling must be dropped.
+    const zip = new AdmZip();
+    const fileNames = Array.from({ length: 7 }, (_, i) => `file-${i}.txt`);
+    for (const name of fileNames) {
+      zip.addFile(name, Buffer.from('a'.repeat(4000)));
+    }
+    const zipPath = path.join(tmpDir, 'export.zip');
+    zip.writeZip(zipPath);
+
+    await waitFor(() => add.mock.calls.length >= 7);
+
+    const calls = add.mock.calls as [string, { originalFileName: string; siblingManifest?: { fileName: string; excerpt: string }[] }][];
+    const job = calls.find(([, data]) => data.originalFileName === 'file-0.txt')?.[1];
+
+    expect(job?.siblingManifest?.length).toBeLessThan(6);
+    const totalChars = (job?.siblingManifest ?? []).reduce((sum, s) => sum + s.excerpt.length, 0);
+    expect(totalChars).toBeLessThanOrEqual(20_000);
   });
 
   it('does not re-enqueue files already sitting in .processed/.failed/.staging', async () => {

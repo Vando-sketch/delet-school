@@ -13,6 +13,17 @@ const ALPHANUMERIC_PATTERN = /[a-zA-Z0-9äöüÄÖÜß]/g;
 export function isQualityText(text: string): boolean {
   const nonWhitespace = text.replace(/\s/g, '');
   if (nonWhitespace.length < MIN_CHARS) return false;
+  return hasQualityAlphanumericRatio(text);
+}
+
+/**
+ * Same alphanumeric-ratio check as isQualityText, without its MIN_CHARS page-length gate -
+ * for callers judging a short, deliberate excerpt (e.g. a one-line document header) rather
+ * than a full page, where "too short to tell" shouldn't be conflated with "garbled."
+ */
+export function hasQualityAlphanumericRatio(text: string): boolean {
+  const nonWhitespace = text.replace(/\s/g, '');
+  if (nonWhitespace.length === 0) return false;
   const alphanumericCount = (nonWhitespace.match(ALPHANUMERIC_PATTERN) ?? []).length;
   return alphanumericCount / nonWhitespace.length >= MIN_ALPHANUMERIC_RATIO;
 }

@@ -6,7 +6,8 @@ import AdmZip from 'adm-zip';
 import pino from 'pino';
 import type { Queue } from 'bullmq';
 import { config } from '../config/index.js';
-import { getFileJobQueue, type FileJobData } from '../queue/index.js';
+import { getFileJobQueue, type FileJobData, type SiblingManifestEntry } from '../queue/index.js';
+import { buildSiblingManifest } from './siblingManifest.js';
 
 const logger = pino({ name: 'ingest-watcher' });
 
@@ -23,14 +24,39 @@ function isZipFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === '.zip';
 }
 
-async function enqueueFile(queue: FileJobQueueLike, filePath: string, originalFileName: string): Promise<void> {
+async function enqueueFile(
+  queue: FileJobQueueLike,
+  filePath: string,
+  originalFileName: string,
+  batch?: { batchId: string; siblingManifest: SiblingManifestEntry[] },
+): Promise<void> {
   const jobData: FileJobData = {
     filePath,
     originalFileName,
     receivedAt: new Date().toISOString(),
+    ...(batch ? { batchId: batch.batchId, siblingManifest: batch.siblingManifest } : {}),
   };
   await queue.add('process-file', jobData);
-  logger.info({ filePath, originalFileName }, 'Enqueued file job');
+  logger.info({ filePath, originalFileName, batchId: batch?.batchId }, 'Enqueued file job');
+}
+
+/**
+ * Hard ceiling on combined sibling-excerpt characters embedded in a single job, so a job's
+ * Redis payload and the LLM prompt built from it don't grow O(N^2) with the batch size (every
+ * file would otherwise embed every other file's full excerpt). Siblings are included in order
+ * until the budget is spent; the rest are simply omitted from that job's context.
+ */
+const MAX_TOTAL_SIBLING_CHARS = 20_000;
+
+function boundSiblingManifest(entries: SiblingManifestEntry[]): SiblingManifestEntry[] {
+  const bounded: SiblingManifestEntry[] = [];
+  let total = 0;
+  for (const entry of entries) {
+    if (total + entry.excerpt.length > MAX_TOTAL_SIBLING_CHARS) break;
+    bounded.push(entry);
+    total += entry.excerpt.length;
+  }
+  return bounded;
 }
 
 /** Recursively lists regular files under a directory (used to enqueue extracted zip contents). */
@@ -73,8 +99,22 @@ async function handleZip(queue: FileJobQueueLike, watchDir: string, zipPath: str
   if (extractedFiles.length === 0) {
     logger.warn({ zipPath }, 'Zip archive contained no files; nothing to enqueue');
   }
+
+  // Captured once upfront, before any file in the batch can be archived away by the worker -
+  // every job embeds its siblings' excerpts directly rather than reading them live off disk later.
+  const batchId = randomUUID();
+  const manifestByPath = await buildSiblingManifest(
+    extractedFiles.map((filePath) => ({ filePath, relativeName: path.relative(stagingDir, filePath) })),
+  );
+
   for (const filePath of extractedFiles) {
-    await enqueueFile(queue, filePath, path.relative(stagingDir, filePath));
+    const siblingManifest = boundSiblingManifest(
+      extractedFiles
+        .filter((other) => other !== filePath)
+        .map((other) => manifestByPath.get(other))
+        .filter((entry): entry is SiblingManifestEntry => entry !== undefined),
+    );
+    await enqueueFile(queue, filePath, path.relative(stagingDir, filePath), { batchId, siblingManifest });
   }
 
   await archiveFile(watchDir, zipPath, config.ingest.processedDirName);
