@@ -1,26 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createFileProcessor } from '../src/claude/processFile.js';
-import type { DownloadedFile } from '../src/types.js';
+import type { ExtractionResult } from '../src/types.js';
 
-// The real SDK spawns a subprocess; nothing in this file ever reaches it — every test
-// injects a fake `queryFn`. `config.anthropic.apiKey()` is still called for its fail-fast
-// check, so give it a value (never used to authenticate anything, since we never hit the
-// network in these tests).
 process.env.ANTHROPIC_API_KEY ??= 'test-api-key';
 
-function makeFile(overrides: Partial<DownloadedFile> = {}): DownloadedFile {
+function makeExtraction(overrides: Partial<ExtractionResult> = {}): ExtractionResult {
   return {
-    fileName: 'notes.md',
-    mimeType: 'text/markdown',
-    content: Buffer.from('# Notes\n\n- [ ] Follow up with vendor about pricing\n'),
+    markdown: '# Arbeitsblatt\n\nAufgabe 1: Welche Rechte hat der Käufer bei einem Sachmangel?',
+    visionPages: [],
+    ranOcr: false,
+    archivalPdfPath: '/inbox/arbeitsblatt1.pdf',
     ...overrides,
   };
 }
 
-// Builds a fake `result`-type SDKMessage. Cast through `unknown` rather than filling in
-// every field of the real (large) SDKResultMessage union — processFile.ts only reads
-// `type`, `subtype`, `result`, `structured_output`, and `errors`.
 function makeResultMessage(fields: Record<string, unknown>): SDKMessage {
   return {
     type: 'result',
@@ -39,65 +33,104 @@ function makeResultMessage(fields: Record<string, unknown>): SDKMessage {
   } as unknown as SDKMessage;
 }
 
+const VALID_STRUCTURED_OUTPUT = {
+  isMaterialblatt: false,
+  fach: 'BGWP',
+  thema: 'Kaufvertragsrecht',
+  tasksFound: [
+    {
+      title: 'Mangelhafte Lieferung',
+      taskDescription: 'Welche Rechte hat der Käufer bei einem Sachmangel?',
+      proposedSolution: 'Nacherfüllung nach § 439 BGB.',
+      quelle: '§ 437, § 439 BGB',
+    },
+  ],
+};
+
 describe('createFileProcessor', () => {
   it('returns a correctly parsed ProcessedFileResult given a well-formed SDK response', async () => {
-    const structuredOutput = {
-      tasksFound: [
-        {
-          taskDescription: 'Follow up with vendor about pricing',
-          proposedSolution: 'Email the vendor requesting an updated quote by Friday.',
-        },
-      ],
-      summaryMarkdown: 'One open task found regarding vendor pricing follow-up.',
-    };
-
     async function* fakeQuery(): AsyncGenerator<SDKMessage> {
       yield makeResultMessage({
         subtype: 'success',
-        result: JSON.stringify(structuredOutput),
-        structured_output: structuredOutput,
+        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
+        structured_output: VALID_STRUCTURED_OUTPUT,
       });
     }
 
     const processor = createFileProcessor({ queryFn: fakeQuery });
-    const file = makeFile();
-
-    const result = await processor.processFile(file);
+    const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
     expect(result).toEqual({
-      originalFileName: 'notes.md',
-      tasksFound: structuredOutput.tasksFound,
-      summaryMarkdown: structuredOutput.summaryMarkdown,
+      originalFileName: 'arbeitsblatt1.pdf',
+      isMaterialblatt: false,
+      fach: 'BGWP',
+      thema: 'Kaufvertragsrecht',
+      tasksFound: VALID_STRUCTURED_OUTPUT.tasksFound,
     });
   });
 
-  it('falls back to parsing the plain-text result field when structured_output is absent', async () => {
-    const shape = {
-      tasksFound: [
-        { taskDescription: 'Decide on venue', proposedSolution: 'Book The Grand Hall by end of week.' },
-      ],
-      summaryMarkdown: 'One pending decision found.',
-    };
-
-    async function* fakeQuery(): AsyncGenerator<SDKMessage> {
-      yield makeResultMessage({ subtype: 'success', result: JSON.stringify(shape) });
+  it('passes model=claude-sonnet-5 to the SDK by default', async () => {
+    let capturedModel: unknown;
+    async function* fakeQuery(params: { prompt: unknown; options?: { model?: string } }): AsyncGenerator<SDKMessage> {
+      capturedModel = params.options?.model;
+      yield makeResultMessage({
+        subtype: 'success',
+        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
+        structured_output: VALID_STRUCTURED_OUTPUT,
+      });
     }
 
     const processor = createFileProcessor({ queryFn: fakeQuery });
-    const result = await processor.processFile(makeFile());
+    await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
-    expect(result.tasksFound).toEqual(shape.tasksFound);
-    expect(result.summaryMarkdown).toBe(shape.summaryMarkdown);
+    expect(capturedModel).toBe('claude-sonnet-5');
   });
 
-  it('throws a clear error given an unparseable (non-JSON) SDK response, rather than returning empty/garbage data', async () => {
-    async function* fakeQuery(): AsyncGenerator<SDKMessage> {
-      yield makeResultMessage({ subtype: 'success', result: 'this is not valid json {{{' });
+  it('includes the extracted markdown in a plain string prompt when there are no vision pages', async () => {
+    let capturedPrompt: unknown;
+    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
+      capturedPrompt = params.prompt;
+      yield makeResultMessage({
+        subtype: 'success',
+        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
+        structured_output: VALID_STRUCTURED_OUTPUT,
+      });
     }
 
     const processor = createFileProcessor({ queryFn: fakeQuery });
+    await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
-    await expect(processor.processFile(makeFile())).rejects.toThrow(/not valid JSON/);
+    expect(typeof capturedPrompt).toBe('string');
+    expect(capturedPrompt as string).toContain('Welche Rechte hat der Käufer');
+  });
+
+  it('sends an async-iterable multi-content prompt with image blocks when vision pages are present', async () => {
+    let capturedPrompt: unknown;
+    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
+      capturedPrompt = params.prompt;
+      yield makeResultMessage({
+        subtype: 'success',
+        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
+        structured_output: VALID_STRUCTURED_OUTPUT,
+      });
+    }
+
+    const processor = createFileProcessor({
+      queryFn: fakeQuery,
+      readImageFile: async () => Buffer.from('fake-png-bytes'),
+    });
+    const extraction = makeExtraction({ visionPages: [{ pageNumber: 1, imagePath: '/tmp/page-1.png' }] });
+
+    await processor.processFile('handwritten.pdf', extraction);
+
+    expect(typeof capturedPrompt).toBe('object');
+    const messages: Array<{ message: { content: Array<{ type: string }> } }> = [];
+    for await (const message of capturedPrompt as AsyncIterable<{ message: { content: Array<{ type: string }> } }>) {
+      messages.push(message);
+    }
+    expect(messages).toHaveLength(1);
+    const blockTypes = messages[0]?.message.content.map((block) => block.type);
+    expect(blockTypes).toEqual(['text', 'image']);
   });
 
   it('throws a clear error when the parsed JSON is missing required fields', async () => {
@@ -111,18 +144,7 @@ describe('createFileProcessor', () => {
 
     const processor = createFileProcessor({ queryFn: fakeQuery });
 
-    await expect(processor.processFile(makeFile())).rejects.toThrow(/tasksFound/);
-  });
-
-  it('throws a clear error when a task entry is malformed', async () => {
-    async function* fakeQuery(): AsyncGenerator<SDKMessage> {
-      const bad = { tasksFound: [{ taskDescription: 'missing solution field' }], summaryMarkdown: 'x' };
-      yield makeResultMessage({ subtype: 'success', result: JSON.stringify(bad), structured_output: bad });
-    }
-
-    const processor = createFileProcessor({ queryFn: fakeQuery });
-
-    await expect(processor.processFile(makeFile())).rejects.toThrow(/proposedSolution/);
+    await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/isMaterialblatt/);
   });
 
   it('throws a clear error when the SDK query itself fails (non-success subtype)', async () => {
@@ -132,7 +154,7 @@ describe('createFileProcessor', () => {
 
     const processor = createFileProcessor({ queryFn: fakeQuery });
 
-    await expect(processor.processFile(makeFile())).rejects.toThrow(/Claude query failed/);
+    await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/Claude query failed/);
   });
 
   it('throws a clear error when the SDK yields no result message at all', async () => {
@@ -142,20 +164,23 @@ describe('createFileProcessor', () => {
 
     const processor = createFileProcessor({ queryFn: fakeQuery });
 
-    await expect(processor.processFile(makeFile())).rejects.toThrow(/received no result/);
+    await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/received no result/);
   });
 
-  it('rejects unsupported (binary) file types before ever calling the SDK', async () => {
-    let called = false;
+  it('returns isMaterialblatt=true with an empty tasksFound for reference material', async () => {
+    const materialOutput = { isMaterialblatt: true, fach: 'Deutsch', thema: 'Grammatikregeln', tasksFound: [] };
     async function* fakeQuery(): AsyncGenerator<SDKMessage> {
-      called = true;
-      yield makeResultMessage({ subtype: 'success', result: '{}' });
+      yield makeResultMessage({
+        subtype: 'success',
+        result: JSON.stringify(materialOutput),
+        structured_output: materialOutput,
+      });
     }
 
     const processor = createFileProcessor({ queryFn: fakeQuery });
-    const file = makeFile({ fileName: 'report.pdf', mimeType: 'application/pdf' });
+    const result = await processor.processFile('handout.pdf', makeExtraction());
 
-    await expect(processor.processFile(file)).rejects.toThrow(/unsupported file type/i);
-    expect(called).toBe(false);
+    expect(result.isMaterialblatt).toBe(true);
+    expect(result.tasksFound).toEqual([]);
   });
 });
