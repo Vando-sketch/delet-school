@@ -59,6 +59,18 @@ describe('drainOnce', () => {
     expect((await fs.readdir(watchDir)).sort()).toEqual(['a.pdf', 'b.pdf']);
   });
 
+  it('skips subdirectories and only drains regular files', async () => {
+    await fs.mkdir(path.join(stagingDir, 'a-subdir'));
+    await fs.writeFile(path.join(stagingDir, 'file.pdf'), 'contents');
+
+    await drainOnce(stagingDir, watchDir);
+
+    // The subdirectory should still exist in stagingDir (not moved)
+    expect(await fs.readdir(stagingDir)).toContain('a-subdir');
+    // The file should have been drained into watchDir
+    expect(await fs.readFile(path.join(watchDir, 'file.pdf'), 'utf8')).toBe('contents');
+  });
+
   it('does nothing (no throw) when the staging directory does not exist yet', async () => {
     await fs.rm(stagingDir, { recursive: true, force: true });
 

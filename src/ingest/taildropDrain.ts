@@ -37,6 +37,10 @@ export async function drainOnce(stagingDir: string, watchDir: string): Promise<v
   for (const name of entries) {
     const src = path.join(stagingDir, name);
     try {
+      const stats = await fs.stat(src);
+      if (!stats.isFile()) {
+        continue;
+      }
       const dest = await uniqueDestPath(watchDir, name);
       await fs.rename(src, dest);
       logger.info({ src, dest }, 'Drained Taildrop file into inbox');
