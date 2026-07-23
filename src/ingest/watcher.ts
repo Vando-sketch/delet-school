@@ -7,6 +7,7 @@ import pino from 'pino';
 import type { Queue } from 'bullmq';
 import { config } from '../config/index.js';
 import { getFileJobQueue, type FileJobData } from '../queue/index.js';
+import { createTaildropDrain } from './taildropDrain.js';
 
 const logger = pino({ name: 'ingest-watcher' });
 
@@ -133,4 +134,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   watcher.on('ready', () => {
     logger.info({ watchDir: path.resolve(config.ingest.watchDir) }, 'Ingest watcher ready');
   });
+  createTaildropDrain();
+  logger.info({ stagingDir: path.resolve(config.taildrop.stagingDir) }, 'Taildrop drain loop started');
 }
