@@ -37,42 +37,64 @@ separable in implementation — either can ship without the other.
 ### Design
 
 `isQualityText()` keeps its existing `MIN_CHARS` (100 non-whitespace characters) gate as a
-cheap first filter, then replaces the alphanumeric-ratio check with a two-stage real-word
-check:
+cheap first filter. Below that gate, the text must pass **either** a new dictionary real-word
+check **or** the original alphanumeric-ratio check (kept unchanged, now acting as a safety net
+rather than the primary signal):
 
-1. **Tokenize** the text into candidate words: split on whitespace, strip surrounding
-   punctuation/digits, lowercase, keep tokens with >= 2 alphabetic characters.
-2. **Dictionary ratio**: look up each token in an in-memory `Set<string>` built from German
-   and English word lists plus a small hardcoded domain whitelist (see below). Pass if
+1. **Tokenize** the text into candidate words: extract maximal runs of Unicode letters
+   (`\p{L}+`), keep tokens with >= 2 characters (this naturally strips digits/punctuation as
+   token boundaries, no separate stripping step needed).
+2. **Dictionary ratio** (primary check): look up each token, lowercased, in an in-memory
+   `Set<string>` built from German and English word lists plus a small hardcoded domain
+   whitelist (see below). Passes if there is at least one token and
    `realWordCount / totalTokenCount >= 0.45`.
-3. **Safety net for low-word-ratio pages**: a page that fails step 2 is not immediately
-   rejected if it has "healthy" character structure — no run of >= 6 consecutive
-   non-alphanumeric/non-space characters (the `O0--_x~~`-style pattern that's the actual
-   OCR-garbage signature) — in which case it passes anyway. This exists specifically so
-   formula-, table-, or legal-citation-heavy pages (`f(x) = x^2 + 2x`, `§ 437 BGB`) with a low
-   real-word ratio aren't misclassified as garbage.
+3. **Alphanumeric ratio** (safety net, unchanged from today): fraction of non-whitespace
+   characters that are letters or digits, passes at `>= 0.6`. A page that fails the dictionary
+   check (e.g. `f(x) = x^2 + 2x`, `§ 437 BGB` — few or no recognizable dictionary words) still
+   passes overall if its characters are structurally healthy prose/formula text rather than
+   OCR noise.
+
+An earlier draft of this check used a "run of consecutive symbol characters" pattern as the
+safety net instead of the alphanumeric ratio. Tracing it against this codebase's own gibberish
+fixture (`'l|i1l!! O0--_x~~ '.repeat(10)`, from the existing `isQualityText` tests) showed that
+pattern does **not** fire on it — the symbol runs in that string are only 2-3 characters long,
+never 6+ — so that version would have wrongly classified the existing gibberish test case as
+quality text. The alphanumeric-ratio safety net does not have this problem: that same
+gibberish string is roughly 41% alphanumeric (well under the 0.6 threshold), so it's correctly
+rejected by both checks, while a formula/citation-heavy page (mostly letters, digits, and a few
+symbols like `§`/`^`/`=`) clears 0.6 easily.
 
 ```
-isQualityText(text):
+isQualityText(text, isRealWord):
   nonWhitespace = strip whitespace from text
   if nonWhitespace.length < MIN_CHARS: return false
-  tokens = tokenize(text)                          # >=2 alpha chars, punctuation/digits stripped
-  if tokens.length == 0: return not hasGarbageRun(text)
-  realWordRatio = count(isRealWord(t) for t in tokens) / tokens.length
-  if realWordRatio >= MIN_REAL_WORD_RATIO: return true
-  return not hasGarbageRun(text)                   # safety net for formula/table pages
+  return dictionaryRatioPasses(text, isRealWord) or alphanumericRatioPasses(text)
+
+dictionaryRatioPasses(text, isRealWord):
+  tokens = extract runs of Unicode letters with length >= 2
+  if tokens.length == 0: return false
+  return count(isRealWord(t) for t in tokens) / tokens.length >= MIN_REAL_WORD_RATIO   # 0.45
+
+alphanumericRatioPasses(text):                      # unchanged from today's heuristic
+  nonWhitespace = strip whitespace from text
+  alnumCount = count of Unicode letters/digits in nonWhitespace
+  return alnumCount / nonWhitespace.length >= MIN_ALPHANUMERIC_RATIO                   # 0.6
 ```
 
 `hasQualityAlphanumericRatio()` (used elsewhere for short excerpts like document headers,
-without the `MIN_CHARS` gate) gets the same tokenize + dictionary-ratio treatment, minus the
-length gate, matching its existing contract.
+without the `MIN_CHARS` gate) gets the same `dictionaryRatioPasses or alphanumericRatioPasses`
+treatment, minus the length gate, matching its existing contract.
 
 ### Dictionary source
 
 Add `hunspell-de-de` and `hunspell-en-us` to `docker/Dockerfile`'s apt install list (small,
-combined ~2-5MB). Their `.dic` files (plain `word/AFFIXFLAGS` lines under
-`/usr/share/hunspell/`) are parsed once at process startup: split each line on `/`, keep the
-word, lowercase, insert into a `Set<string>`. Hunspell's affix-rule engine is not needed —
+combined ~2-5MB), which install to the standard Debian paths `/usr/share/hunspell/de_DE.dic`
+and `/usr/share/hunspell/en_US.dic`. `config.dictionary.deDicPath` / `.enDicPath` (new,
+following the existing `config.poppler`/`config.pandoc` pattern of env-overridable binary/
+asset paths, default to those two paths) tell `loadWordSet()` where to read from. Their `.dic`
+files (plain `word/AFFIXFLAGS` lines) are parsed on first use (see the lazy-singleton note
+below): split each line on `/`, keep the word, lowercase, insert into a `Set<string>`.
+Hunspell's affix-rule engine is not needed —
 this is a coarse "is this string anywhere in a known word list" check, not a spellchecker; it
 undercounts inflected forms in edge cases, which is acceptable given the 0.45 ratio threshold
 already tolerates some proportion of unmatched real words.
@@ -98,9 +120,19 @@ files with `fs.readFileSync` (they're small, read once):
 - `src/extract/pdfText.ts`:
   - `isQualityText(text: string, isRealWord?: WordValidator): boolean`
   - `hasQualityAlphanumericRatio(text: string, isRealWord?: WordValidator): boolean`
-  - Both default `isRealWord` to a validator built once from `loadWordSet()` at module load
-    (module-level `const`, not lazy) — callers that inject their own `WordValidator` (all unit
-    tests) never trigger the real dictionary read.
+  - Both default `isRealWord` to a validator resolved by `getDefaultIsRealWord()`, a lazily
+    memoized singleton (built on first call that doesn't supply its own `isRealWord`, then
+    cached) — **not** built eagerly at module load. Eager module-load construction would make
+    `import`ing this file throw on any machine without the hunspell dictionaries installed
+    (any dev machine or CI run outside the Docker image), since `loadWordSet()` reads real
+    files from disk. `getDefaultIsRealWord()` wraps its one-time `loadWordSet()` call in a
+    try/catch: on failure (missing dictionary files), it logs a warning once and falls back to
+    an always-true validator, so the dictionary check always passes when there's at least one
+    token and quality gating degrades to the alphanumeric-ratio check alone — exactly today's
+    shipped behavior, so this is a graceful degradation, not a silent correctness loss, and it
+    only affects environments without hunspell installed (i.e. never the production Docker
+    image). Every unit test supplies its own `WordValidator`, so the lazy loader — and its
+    filesystem access — is never exercised by the test suite.
 - `src/extract/index.ts`'s `ExtractDeps` gains an optional `isQualityText` override exactly as
   it already does for the other extraction functions — no shape change beyond the new
   optional `WordValidator` parameter flowing through.
@@ -109,17 +141,21 @@ files with `fs.readFileSync` (they're small, read once):
 
 - `test/extract/dictionary.test.ts` (new): `loadWordSet()` parses a small fake `.dic` fixture
   (injected via `readFileSync`) into the expected `Set`; affix flags after `/` are stripped.
-- `test/extract/pdfText.test.ts` (extended): inject a small fake `WordValidator` (e.g.
-  `(w) => ['der', 'kaufvertrag', 'mangel'].includes(w)`) — no real dictionary file touched in
-  unit tests. Cases: real German prose passes; `"l|i1l!! O0--_x~~".repeat(10)` fails (both low
-  real-word ratio and a garbage run); a formula-heavy line with a healthy character structure
-  but low real-word ratio passes via the safety net; a `_Unsortiert`-style low-ratio page *with*
-  a garbage run fails.
+- `test/extract/pdfText.test.ts` (extended, and its 3 existing cases updated to pass an
+  explicit fake `WordValidator` instead of relying on the real default — the suite must not
+  depend on whether hunspell happens to be installed on the machine running it): real German
+  prose passes with a permissive fake validator; `"l|i1l!! O0--_x~~ ".repeat(10)` fails with a
+  validator that recognizes no words (zero qualifying tokens *and* alphanumeric ratio ~41%,
+  under the 0.6 threshold — fails both checks); a formula/citation-style line with real
+  2+-letter tokens but a validator that recognizes none of them as real words still passes,
+  because its alphanumeric ratio is high (safety net); a line with word-shaped tokens *and*
+  heavy symbol noise, with a validator that recognizes no words, fails both checks.
 
 ### Risk carried forward (not resolved by this design)
 
-The 0.45 ratio and the "6 consecutive non-alphanumeric chars" garbage-run threshold are
-starting points, not empirically tuned — same caveat the original heuristic shipped with.
+The 0.45 dictionary-ratio threshold is a starting point, not empirically tuned — same caveat
+the original 0.6 alphanumeric-ratio heuristic shipped with (and which is kept, unchanged, as
+the safety net here).
 Tuning against real scanned/handwritten homework is expected follow-up once this is in use,
 same as today.
 
@@ -225,7 +261,7 @@ support case-insensitive host filesystems.
 
 | Question | Decision |
 |---|---|
-| OCR-quality check approach | Real-word dictionary ratio (hunspell DE/EN word lists) + garbage-run safety net for formula/table pages |
+| OCR-quality check approach | Real-word dictionary ratio (hunspell DE/EN word lists), OR the original alphanumeric-ratio check as a safety net for formula/table pages |
 | Dictionary dependency | `hunspell-de-de` / `hunspell-en-us` apt packages, parsed once at startup into an in-memory `Set` |
 | Subfolder watch depth | Unlimited (remove `depth: 0`), no new config |
 | POSIX fix scope | `fs.rename` → `EXDEV`-aware copy+unlink fallback; ignored-dir matching by path segment |
