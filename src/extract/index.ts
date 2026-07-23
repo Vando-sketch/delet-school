@@ -17,6 +17,9 @@ export interface ExtractDeps {
 }
 
 const TEXT_EXTENSIONS = new Set(['.txt', '.md']);
+// Has a real text layer already (no scans/handwriting), so it skips the OCR/vision pipeline
+// entirely and goes straight through MarkItDown, same as a text-layer PDF's markdown step.
+const MARKITDOWN_DIRECT_EXTENSIONS = new Set(['.docx']);
 
 export async function extractFile(
   filePath: string,
@@ -34,6 +37,11 @@ export async function extractFile(
 
   if (TEXT_EXTENSIONS.has(ext)) {
     const markdown = await fs.readFile(filePath, 'utf-8');
+    return { markdown, visionPages: [], ranOcr: false, archivalPdfPath: filePath };
+  }
+
+  if (MARKITDOWN_DIRECT_EXTENSIONS.has(ext)) {
+    const markdown = await toMarkdown(filePath);
     return { markdown, visionPages: [], ranOcr: false, archivalPdfPath: filePath };
   }
 
