@@ -46,4 +46,32 @@ describe('renderSolutionPdf', () => {
     // Cleans up both the temp markdown source and the intermediate PDF it read back from.
     expect(rmCalls).toHaveLength(2);
   });
+
+  it('cleans up temp files even when pandoc fails', async () => {
+    const writeCalls: Array<{ path: string; data: string }> = [];
+    const execCalls: Array<{ file: string; args: readonly string[] }> = [];
+    const rmCalls: string[] = [];
+
+    const deps = {
+      writeFile: async (path: string, data: string) => {
+        writeCalls.push({ path, data });
+      },
+      execFile: async (file: string, args: readonly string[]) => {
+        execCalls.push({ file, args });
+        throw new Error('pandoc failed');
+      },
+      readFile: async () => Buffer.from(''),
+      rm: async (path: string) => {
+        rmCalls.push(path);
+      },
+    };
+
+    await expect(renderSolutionPdf('# markdown', deps)).rejects.toThrow('pandoc failed');
+
+    // Verify execFile was called once (before failing)
+    expect(execCalls).toHaveLength(1);
+
+    // Verify cleanup still happened twice despite the pandoc failure
+    expect(rmCalls).toHaveLength(2);
+  });
 });
