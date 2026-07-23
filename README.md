@@ -10,7 +10,10 @@ dropped school PDF, solve it, file it under the right subject.
 You, manually: download/export files from Teams (zip, PDF, ...)
         │
         ▼
-Drop into __INBOX__ (e.g. a Nextcloud-synced directory)
+Send with Taildrop, to this app's tailnet device
+        │
+        ▼
+Tailscale sidecar drains the Taildrop queue into __INBOX__
         │
         ▼
 Ingest watcher ── extracts zips (one job per contained file), enqueues each file
@@ -25,8 +28,8 @@ Worker
         ├─ 2. Claude Agent SDK: classify subject, solve every task with citations
         ├─ 3. Render a styled solution PDF (pandoc + weasyprint) — or, for a pure
         │      Materialblatt (no tasks), skip straight to filing the source
-        ├─ 4. Write into Nextcloud: Fächer/<Fach>/[<Lernfeld>/]<name>_Loesung_<date>.pdf
-        │      + `occ files:scan`
+        ├─ 4. Write into Nextcloud over WebDAV (via Tailscale):
+        │      Fächer/<Fach>/[<Lernfeld>/]<name>_Loesung_<date>.pdf
         └─ 5. Archive the source (OCR'd searchable version if OCR ran) into `.processed/`
              (or `.failed/` on error)
 ```
@@ -43,12 +46,14 @@ Worker
   Info-/Materialblatt vs. Aufgabenblatt, and solves every task found with citations.
 - `src/pdf/` — builds the solution Markdown and renders it to a styled PDF via
   `pandoc`+`weasyprint`.
-- `src/nextcloud/` — writes the result into Nextcloud's data directory under
-  `Fächer/<Fach>/[<Lernfeld>/]`, and triggers `occ files:scan`.
+- `src/nextcloud/` — writes the result into Nextcloud under `Fächer/<Fach>/[<Lernfeld>/]` over
+  WebDAV.
+- `src/ingest/taildropDrain.ts` — moves files the Tailscale sidecar drains from Taildrop into
+  the watched inbox directory.
 - `src/worker/` — wires the above together: read from disk → process → write → archive, one
   BullMQ `Worker` consuming the queue.
-- `docker/`, `docker-compose.yml` — containerized ingest watcher + worker + Redis, with bind
-  mounts for the watched folder and Nextcloud's data directory.
+- `docker/`, `docker-compose.yml` — containerized ingest watcher + worker + Redis + a Tailscale
+  sidecar; no Nextcloud filesystem access needed, only a WebDAV connection over the tailnet.
 
 ## Setup
 
@@ -61,16 +66,20 @@ npm run dev:worker     # local worker
 
 `STUDENT_NAME` and `STUDENT_KLASSE` are required and used to personalize solution output.
 
-`INGEST_WATCH_DIR` defaults to `__INBOX__` in the root of the project directory, but can be
-pointed at any folder you'll drop downloaded files into. A convenient option is a folder synced
-by the Nextcloud desktop/mobile client (or uploaded via Nextcloud's web UI) — that way "upload
-a file to Nextcloud" is the entire manual step, with no separate transfer to the machine running
-this app.
+`INGEST_WATCH_DIR` defaults to `__INBOX__` in the root of the project directory - files land
+there via the Tailscale sidecar draining Taildrop sends into it (see below), so it doesn't need
+to be synced with anything.
 
 To get files in: from Teams/SharePoint, use "Download" on individual files, or "Download as
-zip" on a folder of files, then drop the result into the watched folder. Zip archives are
-extracted automatically and every file inside is processed individually; everything else
-(PDF, .txt, .md, ...) is processed as-is.
+zip" on a folder of files; then, on a device with Tailscale installed, send the result with
+Taildrop to this app's tailnet device (`TS_HOSTNAME`). Zip archives are extracted automatically
+and every file inside is processed individually; everything else (PDF, .txt, .md, ...) is
+processed as-is.
+
+Nextcloud itself only needs to be reachable over HTTPS on the tailnet (its normal web server,
+at its Tailscale MagicDNS hostname) - see `.env.example` for the `NEXTCLOUD_*` and `TS_*`
+variables, and `docker/tailscale/` for the sidecar that provides tailnet connectivity to the
+`ingest`/`worker`/`redis` containers.
 
 `ANTHROPIC_API_KEY` is optional: the Claude Agent SDK subprocess can instead authenticate via a
 Claude Pro/Max subscription login (`claude login` in the worker's environment), which draws
