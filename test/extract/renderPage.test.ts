@@ -31,4 +31,14 @@ describe('renderPageToPng', () => {
       renderPageToPng('/tmp/doc.pdf', 5, '/tmp/vision-pages', { execFile, mkdir, readdir }),
     ).rejects.toThrow(/did not produce an image for page 5/);
   });
+
+  it('correctly distinguishes page-1 from page-10+ when both exist', async () => {
+    const execFile = async () => ({ stdout: '', stderr: '' });
+    const mkdir = async () => undefined;
+    const readdir = async () => ['page-10-1.png', 'page-1-1.png'];
+
+    const result = await renderPageToPng('/tmp/doc.pdf', 1, '/tmp/vision-pages', { execFile, mkdir, readdir });
+
+    expect(result).toBe('/tmp/vision-pages/page-1-1.png');
+  });
 });

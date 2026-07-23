@@ -37,7 +37,12 @@ export async function renderPageToPng(
   // page-2-1.png), and the exact suffix format varies by poppler version - list the dir
   // instead of guessing the filename.
   const entries = await readdir(outputDir);
-  const match = entries.find((name) => name.startsWith(`page-${pageNumber}`) && name.endsWith('.png'));
+  const filenamePrefix = `page-${pageNumber}`;
+  const match = entries.find((name) => {
+    if (!name.startsWith(filenamePrefix) || !name.endsWith('.png')) return false;
+    const boundaryChar = name[filenamePrefix.length];
+    return boundaryChar === undefined || !/[0-9]/.test(boundaryChar);
+  });
   if (!match) {
     throw new Error(`extract/renderPage: pdftoppm did not produce an image for page ${pageNumber}`);
   }
