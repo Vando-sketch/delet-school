@@ -84,8 +84,6 @@ optional (defaults to claude-sonnet-5, since homework-solving requires more reas
 
 ## Known open items
 
-- `.docx` extraction is not wired up yet (MarkItDown supports it; the extraction module
-  already routes by file extension, so this is a small follow-up).
 - The OCR-quality gate (`isQualityText` in `src/extract/pdfText.ts`) uses a simple
   alphanumeric-ratio heuristic; a stronger check (e.g. dictionary-based) is a reasonable
   follow-up if it proves too permissive/strict in practice.
