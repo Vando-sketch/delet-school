@@ -19,7 +19,7 @@ export const config = {
   ingest: {
     // Folder watched for manually-downloaded files (zips, PDFs, docs, etc.) - e.g. a
     // Nextcloud-synced directory the user drops exported Teams files into by hand.
-    watchDir: optional('INGEST_WATCH_DIR', './inbox'),
+    watchDir: optional('INGEST_WATCH_DIR', '__INBOX__'),
     // Subfolders of watchDir that ingested files are moved into after processing, so the
     // watcher never re-enqueues its own output. Kept inside watchDir so a single bind mount
     // covers everything.
@@ -37,11 +37,33 @@ export const config = {
     // (`claude login`) instead of API billing. The SDK subprocess inherits process.env and
     // resolves its own auth source; we don't require a key here.
     apiKey: (): string | undefined => process.env.ANTHROPIC_API_KEY,
-    model: optional('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001'),
+    model: optional('ANTHROPIC_MODEL', 'claude-sonnet-5'),
   },
   nextcloud: {
     dataDir: () => required('NEXTCLOUD_DATA_DIR'),
     targetUser: () => required('NEXTCLOUD_TARGET_USER'),
     occBinary: optional('NEXTCLOUD_OCC_BIN', '/var/www/nextcloud/occ'),
+  },
+  student: {
+    name: (): string => required('STUDENT_NAME'),
+    klasse: (): string => required('STUDENT_KLASSE'),
+  },
+  poppler: {
+    pdftotextBin: optional('PDFTOTEXT_BIN', 'pdftotext'),
+    pdftoppmBin: optional('PDFTOPPM_BIN', 'pdftoppm'),
+    pdfinfoBin: optional('PDFINFO_BIN', 'pdfinfo'),
+  },
+  ocr: {
+    binary: optional('OCRMYPDF_BIN', 'ocrmypdf'),
+    languages: optional('OCR_LANGUAGES', 'deu+eng'),
+  },
+  markitdown: {
+    binary: optional('MARKITDOWN_BIN', '/app/.venv/bin/markitdown'),
+  },
+  pandoc: {
+    binary: optional('PANDOC_BIN', 'pandoc'),
+    templatePath: optional('PANDOC_TEMPLATE_PATH', '/app/vorlage/template.html'),
+    cssPath: optional('PANDOC_CSS_PATH', '/app/vorlage/style.css'),
+    weasyprintBinary: optional('WEASYPRINT_BIN', '/app/.venv/bin/weasyprint'),
   },
 };
