@@ -1,49 +1,56 @@
 # Multi-stage Dockerfile for teams-task-agent ingest and worker services
 # Both services use the same image with different entrypoint commands (supplied via docker-compose)
+#
+# Debian slim (not Alpine) - ocrmypdf/markitdown/weasyprint's native dependencies (Ghostscript,
+# qpdf, Cairo/Pango) are far more reliably available via apt than via Alpine's musl-libc/apk.
 
 # === Build stage ===
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Copy package files
 COPY package.json package-lock.json* ./
-
-# Install dependencies (all, including dev)
-# NOTE: Once package-lock.json is committed to the repo, switch to `npm ci` instead of `npm install`
-#       for reproducible, locked builds in Docker
 RUN npm install
 
-# Copy source code
 COPY tsconfig.json ./
 COPY src ./src
 
-# Compile TypeScript to JavaScript
 RUN npm run build
 
 # === Runtime stage ===
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
-# Create non-root user to run the application
-RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    poppler-utils \
+    ocrmypdf \
+    tesseract-ocr \
+    tesseract-ocr-deu \
+    tesseract-ocr-eng \
+    pandoc \
+    fonts-liberation \
+    python3 \
+    python3-venv \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy package files from builder
+# Dedicated venv for markitdown + weasyprint - same workaround as the old schule-loesen skill
+# used for weasyprint (Debian's "externally-managed-environment" blocks a bare `pip install`).
+RUN python3 -m venv /app/.venv \
+    && /app/.venv/bin/pip install --quiet --no-cache-dir --upgrade pip \
+    && /app/.venv/bin/pip install --quiet --no-cache-dir markitdown weasyprint
+
+RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -s /bin/false nodejs
+
 COPY package.json package-lock.json* ./
-
-# Install only production dependencies
-# NOTE: Once lockfile is committed, switch to `npm ci --omit=dev`
 RUN npm install --omit=dev
 
-# Copy compiled application from builder
 COPY --from=builder /app/dist ./dist
+COPY docker/vorlage ./vorlage
 
-# Change ownership to non-root user
 RUN chown -R nodejs:nodejs /app
 
-# Switch to non-root user
 USER nodejs
 
 # No CMD or ENTRYPOINT here — the command is supplied via docker-compose's `command:` field
-# This allows both ingest (npm run start:ingest) and worker (npm run start:worker) to use the same image
