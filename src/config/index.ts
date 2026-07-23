@@ -44,10 +44,18 @@ export const config = {
     apiKey: (): string | undefined => process.env.ANTHROPIC_API_KEY,
     model: optional('ANTHROPIC_MODEL', 'claude-sonnet-5'),
   },
+  // Reached over Tailscale via WebDAV (see the `tailscale` sidecar service in
+  // docker-compose.yml) - no filesystem or `occ` access to Nextcloud's host needed.
   nextcloud: {
-    dataDir: () => required('NEXTCLOUD_DATA_DIR'),
-    targetUser: () => required('NEXTCLOUD_TARGET_USER'),
-    occBinary: optional('NEXTCLOUD_OCC_BIN', '/var/www/nextcloud/occ'),
+    baseUrl: () => required('NEXTCLOUD_BASE_URL'),
+    username: () => required('NEXTCLOUD_USERNAME'),
+    appPassword: () => required('NEXTCLOUD_APP_PASSWORD'),
+  },
+  taildrop: {
+    // Directory the tailscale sidecar drains its Taildrop queue into (shared Docker volume
+    // with the ingest container - see docker-compose.yml).
+    stagingDir: optional('TAILDROP_STAGING_DIR', '/taildrop-staging'),
+    pollIntervalMs: Number(optional('TAILDROP_POLL_INTERVAL_MS', '5000')),
   },
   student: {
     name: (): string => required('STUDENT_NAME'),
