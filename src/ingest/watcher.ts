@@ -37,7 +37,26 @@ async function enqueueFile(
     ...(batch ? { batchId: batch.batchId, siblingManifest: batch.siblingManifest } : {}),
   };
   await queue.add('process-file', jobData);
-  logger.info({ filePath, originalFileName }, 'Enqueued file job');
+  logger.info({ filePath, originalFileName, batchId: batch?.batchId }, 'Enqueued file job');
+}
+
+/**
+ * Hard ceiling on combined sibling-excerpt characters embedded in a single job, so a job's
+ * Redis payload and the LLM prompt built from it don't grow O(N^2) with the batch size (every
+ * file would otherwise embed every other file's full excerpt). Siblings are included in order
+ * until the budget is spent; the rest are simply omitted from that job's context.
+ */
+const MAX_TOTAL_SIBLING_CHARS = 20_000;
+
+function boundSiblingManifest(entries: SiblingManifestEntry[]): SiblingManifestEntry[] {
+  const bounded: SiblingManifestEntry[] = [];
+  let total = 0;
+  for (const entry of entries) {
+    if (total + entry.excerpt.length > MAX_TOTAL_SIBLING_CHARS) break;
+    bounded.push(entry);
+    total += entry.excerpt.length;
+  }
+  return bounded;
 }
 
 /** Recursively lists regular files under a directory (used to enqueue extracted zip contents). */
@@ -89,10 +108,12 @@ async function handleZip(queue: FileJobQueueLike, watchDir: string, zipPath: str
   );
 
   for (const filePath of extractedFiles) {
-    const siblingManifest = extractedFiles
-      .filter((other) => other !== filePath)
-      .map((other) => manifestByPath.get(other))
-      .filter((entry): entry is SiblingManifestEntry => entry !== undefined);
+    const siblingManifest = boundSiblingManifest(
+      extractedFiles
+        .filter((other) => other !== filePath)
+        .map((other) => manifestByPath.get(other))
+        .filter((entry): entry is SiblingManifestEntry => entry !== undefined),
+    );
     await enqueueFile(queue, filePath, path.relative(stagingDir, filePath), { batchId, siblingManifest });
   }
 

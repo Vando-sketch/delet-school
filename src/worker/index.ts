@@ -41,8 +41,8 @@ async function removeOriginalIfArchivedElsewhere(filePath: string, archivalPath:
 }
 
 async function handleJob(job: Job<FileJobData>): Promise<void> {
-  const { filePath, originalFileName } = job.data;
-  logger.info({ jobId: job.id, filePath, originalFileName }, 'processing file job');
+  const { filePath, originalFileName, batchId } = job.data;
+  logger.info({ jobId: job.id, filePath, originalFileName, batchId }, 'processing file job');
 
   // Kept inside watchDir (in the same ignored staging subfolder the ingest watcher uses for
   // zip extraction) rather than os.tmpdir(), so it's on the same filesystem/device as the
@@ -89,7 +89,7 @@ export function createFileJobWorker(): Worker<FileJobData> {
   });
 
   worker.on('failed', (job, err) => {
-    logger.error({ jobId: job?.id, err }, 'file job failed');
+    logger.error({ jobId: job?.id, batchId: job?.data.batchId, err }, 'file job failed');
   });
 
   return worker;

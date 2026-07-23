@@ -65,7 +65,7 @@ describe('buildSiblingManifest', () => {
     expect(manifest.get('/staging/photo.png')).toEqual({ fileName: 'photo.png', excerpt: '' });
   });
 
-  it('truncates excerpts to EXCERPT_CHAR_CAP characters', async () => {
+  it('truncates excerpts to EXCERPT_CHAR_CAP characters and appends a truncation marker', async () => {
     const longText = 'x'.repeat(EXCERPT_CHAR_CAP + 500);
     const getPageText = async () => longText;
 
@@ -73,8 +73,33 @@ describe('buildSiblingManifest', () => {
       getPageText,
     });
 
-    expect(manifest.get('/staging/long.pdf')?.excerpt).toHaveLength(EXCERPT_CHAR_CAP);
-    expect(manifest.get('/staging/long.pdf')?.excerpt).toBe(longText.slice(0, EXCERPT_CHAR_CAP));
+    const excerpt = manifest.get('/staging/long.pdf')?.excerpt ?? '';
+    expect(excerpt.startsWith(longText.slice(0, EXCERPT_CHAR_CAP))).toBe(true);
+    expect(excerpt).toContain('gekürzt');
+    expect(excerpt.length).toBeGreaterThan(EXCERPT_CHAR_CAP);
+  });
+
+  it('discards a .pdf excerpt whose text is mostly non-alphanumeric OCR/scan garbage', async () => {
+    const getPageText = async () => 'l|i1l!! O0--_x~~ ][{}##@@$$%%^^&&**';
+
+    const manifest = await buildSiblingManifest([{ filePath: '/staging/scan.pdf', relativeName: 'scan.pdf' }], {
+      getPageText,
+    });
+
+    expect(manifest.get('/staging/scan.pdf')).toEqual({ fileName: 'scan.pdf', excerpt: '' });
+  });
+
+  it('keeps a short .pdf excerpt with a good alphanumeric ratio even though it is well under 100 chars', async () => {
+    const getPageText = async () => 'Fachbereich IT/Elektrotechnik';
+
+    const manifest = await buildSiblingManifest([{ filePath: '/staging/header.pdf', relativeName: 'header.pdf' }], {
+      getPageText,
+    });
+
+    expect(manifest.get('/staging/header.pdf')).toEqual({
+      fileName: 'header.pdf',
+      excerpt: 'Fachbereich IT/Elektrotechnik',
+    });
   });
 
   it('gives one failing file an empty excerpt without affecting the others', async () => {

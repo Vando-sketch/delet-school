@@ -192,6 +192,26 @@ describe('createFileProcessor', () => {
     expect(prompt).toContain('Lieferant: | Lieferant: | Lieferant:');
   });
 
+  it('wraps each sibling excerpt in a <sibling_file> tag, mirroring the <file_content> wrapper on the primary file', async () => {
+    let capturedPrompt: unknown;
+    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
+      capturedPrompt = params.prompt;
+      yield makeResultMessage({
+        subtype: 'success',
+        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
+        structured_output: VALID_STRUCTURED_OUTPUT,
+      });
+    }
+
+    const processor = createFileProcessor({ queryFn: fakeQuery });
+    await processor.processFile('arbeitsblatt1.pdf', makeExtraction(), [
+      { fileName: 'lieferant-a.pdf', excerpt: 'some excerpt text' },
+    ]);
+
+    const prompt = capturedPrompt as string;
+    expect(prompt).toContain('<sibling_file name="lieferant-a.pdf">\nsome excerpt text\n</sibling_file>');
+  });
+
   it('produces a prompt byte-identical to the no-siblings case when siblings is an empty array', async () => {
     let promptWithoutArg: unknown;
     let promptWithEmptyArray: unknown;

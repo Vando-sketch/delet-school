@@ -115,6 +115,31 @@ describe('createIngestWatcher', () => {
     expect(bEntry?.excerpt).toBe('content of b');
   });
 
+  it('bounds a job\'s total sibling-excerpt characters instead of embedding every other file in full', async () => {
+    const add = vi.fn().mockResolvedValue(undefined);
+    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
+    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
+
+    // 7 files, each with a full-cap (4000 char) excerpt: 6 siblings per job would be 24,000
+    // combined chars - over the 20,000 per-job budget - so at least one sibling must be dropped.
+    const zip = new AdmZip();
+    const fileNames = Array.from({ length: 7 }, (_, i) => `file-${i}.txt`);
+    for (const name of fileNames) {
+      zip.addFile(name, Buffer.from('a'.repeat(4000)));
+    }
+    const zipPath = path.join(tmpDir, 'export.zip');
+    zip.writeZip(zipPath);
+
+    await waitFor(() => add.mock.calls.length >= 7);
+
+    const calls = add.mock.calls as [string, { originalFileName: string; siblingManifest?: { fileName: string; excerpt: string }[] }][];
+    const job = calls.find(([, data]) => data.originalFileName === 'file-0.txt')?.[1];
+
+    expect(job?.siblingManifest?.length).toBeLessThan(6);
+    const totalChars = (job?.siblingManifest ?? []).reduce((sum, s) => sum + s.excerpt.length, 0);
+    expect(totalChars).toBeLessThanOrEqual(20_000);
+  });
+
   it('does not re-enqueue files already sitting in .processed/.failed/.staging', async () => {
     await fs.mkdir(path.join(tmpDir, '.processed'), { recursive: true });
     await fs.writeFile(path.join(tmpDir, '.processed', 'old-result.md'), 'already handled');
