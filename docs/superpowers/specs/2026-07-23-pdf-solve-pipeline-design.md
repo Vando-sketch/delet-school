@@ -41,10 +41,21 @@ extraction stage — NEW (src/extract/)
    └─ OCR text still garbled/handwriting → pdftoppm renders pages to PNG, Claude reads
                                             the images directly (vision), same last-resort
                                             behavior as the old skill
-   Heuristic for choosing the branch: same as the old skill — run `pdftotext`, count
-   non-whitespace characters; >=100 chars means a usable text layer exists (branch 1);
-   otherwise attempt OCR (branch 2) and re-check the character count; if still too low,
-   or the OCR'd text looks garbled, fall back to vision (branch 3).
+   Heuristic for choosing the branch, evaluated PER PAGE (not once over the whole
+   document — a typed cover page must not mask handwritten pages after it):
+     1. Run `pdftotext` (page-scoped, splitting on the form-feed page breaks it emits)
+        and count non-whitespace characters for that page; >=100 chars is the baseline
+        signal a text layer exists.
+     2. That count alone is not sufficient — Tesseract garbage from handwritten OCR
+        (e.g. "l|i1l!! O0--_x~~") can also clear 100 chars. Gate branch 1/2 acceptance
+        on a text-quality check beyond raw length (e.g. alphanumeric-character ratio as
+        a cheap proxy; a stronger check is a reasonable follow-up). A page that fails
+        the quality gate falls through to OCR (if not already attempted) and then to
+        vision, even if its raw character count was high.
+     3. Any page that still fails the quality gate after OCR falls back to vision for
+        that page specifically.
+   Exact thresholds/implementation of the quality gate are an implementation-planning
+   detail, not fixed here.
    ▼
 Claude solve step — CHANGED (src/claude/processFile.ts)
    Default model: Sonnet (was Haiku — homework solving needs more reasoning than the old
@@ -54,28 +65,57 @@ Claude solve step — CHANGED (src/claude/processFile.ts)
      2. Determine Fach (subject) via the fixed lookup table below, using the document's
         own header/text as the primary signal and the file's source folder path (from the
         zip's internal structure, or the dropped file's relative path) as a secondary hint
-        when the document text is ambiguous.
+        when the document text is ambiguous. The prompt instructs Claude to map loose/
+        synonymous inputs onto the fixed enum aggressively (e.g. "Mathe"/"Mathematik",
+        "EDV"/"IT/FU-IT" — both mean the same table entry) rather than treating a
+        near-miss spelling as unclassifiable.
      3. Solve every open task fully and precisely (no filler), with concrete citations
         (§/source) in a per-task `quelle` field where applicable.
-   Fach lookup table (ported as-is from schule-loesen):
+   Fach lookup table (ported as-is from schule-loesen) — fixed, closed set. A subject
+   outside this set is deliberately NOT auto-created as a new folder (see Output
+   structure below) — this table is a guardrail against folder-naming drift (typos,
+   near-duplicate folder names across drops), chosen over free-form/dynamic folder
+   creation specifically to keep folder names predictable. Extend the table by hand
+   when a new class is added:
      BGWP → Fächer/BGWP/Grünig, Englisch → Fächer/Englisch, Deutsch → Fächer/Deutsch,
      IT/FU-IT → Fächer/FU-IT, AEuP → Fächer/AEuP, PuG → Fächer/PuG,
      IT-Tec → Fächer/IT-Tec, Religion → Fächer/Religion.
    If the Fach cannot be determined with reasonable confidence from either signal, the
    file is *not* failed — it's routed to Fächer/_Unsortiert/ (see Output structure below).
    ▼
-PDF generation — NEW (src/pdf/)
+PDF generation — NEW (src/pdf/), SKIPPED for Materialblatt
    Solved result is rendered to Markdown (frontmatter: fach, lernfeld?, thema, name,
    klasse, datum; one `## N.` block per task with Frage/Antwort/Quelle sections — see
    Template below), then built via `pandoc --template ... --css ... --pdf-engine
    weasyprint` into the final PDF. Template and stylesheet live in this repo (not
    referenced externally), so the build is fully reproducible in Docker.
+   Before interpolating any Claude-authored string field (taskDescription,
+   proposedSolution, quelle, thema, ...) into the markdown/pandoc fenced-div syntax,
+   escape sequences that would break the pandoc parse (stray `:::`, unbalanced
+   backticks, raw HTML tags) — same defensive posture the codebase already applies to
+   untrusted external content elsewhere (`sanitizeBaseName` in writeResult.ts strips
+   path-traversal/separators from filenames for the same reason: content this pipeline
+   doesn't fully control must not be trusted to be syntactically safe for whatever it's
+   being embedded into).
+   If step 1 above classified the file as Materialblatt (no tasks): skip this stage
+   entirely — there is nothing to render a solution PDF for.
    ▼
 Nextcloud write — CHANGED (src/nextcloud/writeResult.ts)
-   Path: Fächer/<Fach>/[<Lernfeld>/]<original-name-without-ext>_Loesung.pdf
-   Unclassifiable Fach → Fächer/_Unsortiert/<...>_Loesung.pdf
+   Aufgabenblatt: Fächer/<Fach>/[<Lernfeld>/]<original-name-without-ext>_Loesung_<datum>.pdf
+     The `<datum>` suffix is unconditional (not only applied on a detected collision) —
+     dropping the same-named worksheet in a later month must not silently overwrite an
+     earlier solved PDF, and a check-then-suffix approach would race between concurrent
+     jobs. `<datum>` is the same ISO date already in the document frontmatter.
+   Materialblatt: Fächer/<Fach>/Material/<original-name-without-ext>.pdf — the archived
+     source (OCR'd searchable version if OCR ran, else the raw original) is filed
+     directly, no solution PDF generated.
+   Unclassifiable Fach → Fächer/_Unsortiert/<...>, same filename rules as above.
    `occ files:scan` scoped to the specific computed target path (same pattern as today,
-   just with a dynamic path instead of the fixed teams-task-agent subfolder).
+   just with a dynamic path instead of the fixed teams-task-agent subfolder). The
+   existing `fs.mkdir(targetDir, { recursive: true })` before `writeFile` already
+   handles nested Fach/Lernfeld paths that don't exist yet — `occ files:scan --path=...`
+   recursively indexes whatever's on disk at that path, so this needs no new handling
+   beyond what nextcloud/writeResult.ts already does today for the flat case.
    ▼
 archive — CHANGED (src/worker/index.ts)
    .processed/ receives the OCR'd searchable PDF when the extraction stage ran OCR
@@ -103,6 +143,7 @@ export interface TaskSolution {
 
 export interface ProcessedFileResult {
   originalFileName: string;
+  isMaterialblatt: boolean; // true → no tasks, skip PDF generation, file source as reference
   tasksFound: TaskSolution[];
   summaryMarkdown: string; // now the pandoc-ready markdown body (frontmatter + task blocks)
   fach: string; // resolved subject, or "_Unsortiert"
@@ -126,6 +167,13 @@ Worker image needs: `poppler-utils` (`pdftotext`, `pdftoppm`), `ocrmypdf`,
 `tesseract-ocr-deu`, `tesseract-ocr-eng`, `pandoc`, and a Python 3 environment with
 `markitdown` and `weasyprint` installed (mirrors the old skill's dedicated venv
 workaround for weasyprint's packaging issues on Debian).
+
+Minimal Debian/Alpine base images don't ship the serif/sans fonts the template assumes
+(Georgia/Times are proprietary, not present at all) — explicitly install a font package
+(e.g. `fonts-liberation` and/or `fonts-texgyre`) and point the CSS `font-family` stack at
+the metric-compatible open equivalents actually available in the image (e.g. Tinos/
+Liberation Serif in place of Times/Georgia), or the template silently renders in
+whatever default font WeasyPrint falls back to.
 
 ## Error handling
 
