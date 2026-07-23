@@ -75,7 +75,7 @@ extracted automatically and every file inside is processed individually; everyth
 `ANTHROPIC_API_KEY` is optional: the Claude Agent SDK subprocess can instead authenticate via a
 Claude Pro/Max subscription login (`claude login` in the worker's environment), which draws
 from subscription rate limits rather than separate API credits. `ANTHROPIC_MODEL` is also
-optional (defaults to Haiku, since task extraction is a simple, high-volume call).
+optional (defaults to claude-sonnet-5, since homework-solving requires more reasoning than simple task extraction).
 
 ## Commands
 
