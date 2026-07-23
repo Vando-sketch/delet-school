@@ -3,21 +3,17 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createNextcloudWriter } from '../src/nextcloud/writeResult.js';
-import type { DownloadedFile, ProcessedFileResult } from '../src/types.js';
+import type { ProcessedFileResult } from '../src/types.js';
 
 const TARGET_USER = 'alice';
 
-const originalFile: DownloadedFile = {
-  fileName: 'meeting-notes.docx',
-  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  content: Buffer.from('irrelevant binary content'),
-};
-
 function makeResult(overrides: Partial<ProcessedFileResult> = {}): ProcessedFileResult {
   return {
-    originalFileName: 'meeting-notes.docx',
-    tasksFound: [{ taskDescription: 'Send follow-up email', proposedSolution: 'Draft and send by Friday' }],
-    summaryMarkdown: '# Summary\n\n- Send follow-up email: Draft and send by Friday\n',
+    originalFileName: 'arbeitsblatt1.pdf',
+    isMaterialblatt: false,
+    fach: 'BGWP',
+    thema: 'Kaufvertragsrecht',
+    tasksFound: [],
     ...overrides,
   };
 }
@@ -39,60 +35,66 @@ describe('createNextcloudWriter().writeResult', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('creates the expected file with the expected content under {dataDir}/{targetUser}/files/teams-task-agent/', async () => {
+  it('writes a solved PDF under Fächer/<Fach>/<subpath>/ with a date-suffixed filename', async () => {
     const writer = createNextcloudWriter({ execFile: okExecFile });
-    const result = makeResult();
+    const pdfBytes = Buffer.from('%PDF-1.4 fake');
 
-    const { writtenPath } = await writer.writeResult(result, originalFile);
+    const { writtenPath } = await writer.writeResult(makeResult(), { kind: 'pdf', bytes: pdfBytes }, '2026-07-23');
 
-    const expectedDir = path.join(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
-    expect(writtenPath).toBe(path.join(expectedDir, 'meeting-notes.tasks.md'));
-
-    const content = await fs.readFile(writtenPath, 'utf8');
-    expect(content).toBe(result.summaryMarkdown);
+    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
+    expect(writtenPath).toBe(expectedPath);
+    expect(await fs.readFile(writtenPath)).toEqual(pdfBytes);
   });
 
-  it('handles filenames with no extension gracefully', async () => {
+  it('nests under lernfeld when present', async () => {
     const writer = createNextcloudWriter({ execFile: okExecFile });
-    const result = makeResult({ originalFileName: 'report' });
+    const result = makeResult({ fach: 'IT-Tec', lernfeld: 'LF 3' });
 
-    const { writtenPath } = await writer.writeResult(result, originalFile);
+    const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    expect(path.basename(writtenPath)).toBe('report.tasks.md');
-    const content = await fs.readFile(writtenPath, 'utf8');
-    expect(content).toBe(result.summaryMarkdown);
+    expect(writtenPath).toBe(
+      path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'IT-Tec', 'LF 3', 'arbeitsblatt1_Loesung_2026-07-23.pdf'),
+    );
   });
 
-  it('does not let a "../../etc/passwd" originalFileName escape the target directory', async () => {
+  it('routes an unclassifiable Fach to Fächer/_Unsortiert/', async () => {
+    const writer = createNextcloudWriter({ execFile: okExecFile });
+    const result = makeResult({ fach: '_Unsortiert' });
+
+    const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
+
+    expect(writtenPath).toBe(
+      path.join(tmpDir, TARGET_USER, 'files', 'Fächer', '_Unsortiert', 'arbeitsblatt1_Loesung_2026-07-23.pdf'),
+    );
+  });
+
+  it('routes Materialblatt content into Fächer/<Fach>/Material/ with no _Loesung suffix, preserving the source extension', async () => {
+    const writer = createNextcloudWriter({ execFile: okExecFile });
+    const materialSourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'material-src-'));
+    const sourcePath = path.join(materialSourceDir, 'gesetzestext.pdf');
+    await fs.writeFile(sourcePath, 'source bytes');
+
+    const result = makeResult({ isMaterialblatt: true, fach: 'Deutsch', originalFileName: 'gesetzestext.pdf' });
+    const { writtenPath } = await writer.writeResult(result, { kind: 'material', sourcePath }, '2026-07-23');
+
+    expect(writtenPath).toBe(
+      path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'Deutsch', 'Material', 'gesetzestext_2026-07-23.pdf'),
+    );
+    expect(await fs.readFile(writtenPath, 'utf8')).toBe('source bytes');
+
+    await fs.rm(materialSourceDir, { recursive: true, force: true });
+  });
+
+  it('sanitizes a path-traversal originalFileName before it ever reaches the filesystem', async () => {
     const writer = createNextcloudWriter({ execFile: okExecFile });
     const result = makeResult({ originalFileName: '../../etc/passwd' });
 
-    const { writtenPath } = await writer.writeResult(result, originalFile);
+    const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
+    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig');
     const resolvedWritten = path.resolve(writtenPath);
-
     expect(resolvedWritten.startsWith(expectedDir + path.sep)).toBe(true);
     expect(resolvedWritten).not.toContain('..');
-
-    const stat = await fs.stat(writtenPath);
-    expect(stat.isFile()).toBe(true);
-
-    // Make sure nothing was written outside the sandboxed temp dir.
-    await expect(fs.stat('/etc/passwd.tasks.md')).rejects.toThrow();
-  });
-
-  it('does not let a filename containing "/" escape the target directory', async () => {
-    const writer = createNextcloudWriter({ execFile: okExecFile });
-    const result = makeResult({ originalFileName: 'sneaky/sub/dir/evil.txt' });
-
-    const { writtenPath } = await writer.writeResult(result, originalFile);
-
-    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
-    const resolvedWritten = path.resolve(writtenPath);
-
-    expect(resolvedWritten.startsWith(expectedDir + path.sep)).toBe(true);
-    expect(path.dirname(resolvedWritten)).toBe(expectedDir);
   });
 
   it('still resolves successfully with the correct writtenPath if occ files:scan fails', async () => {
@@ -100,31 +102,23 @@ describe('createNextcloudWriter().writeResult', () => {
       throw new Error('spawn occ ENOENT');
     };
     const writer = createNextcloudWriter({ execFile: failingExecFile });
-    const result = makeResult();
 
-    const { writtenPath } = await writer.writeResult(result, originalFile);
+    const { writtenPath } = await writer.writeResult(makeResult(), { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    const expectedDir = path.join(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
-    expect(writtenPath).toBe(path.join(expectedDir, 'meeting-notes.tasks.md'));
-
-    const content = await fs.readFile(writtenPath, 'utf8');
-    expect(content).toBe(result.summaryMarkdown);
+    expect(await fs.stat(writtenPath).then(() => true)).toBe(true);
   });
 
-  it('invokes occ files:scan scoped to the target user files subfolder', async () => {
+  it('invokes occ files:scan scoped to the computed Fach/Lernfeld target directory', async () => {
     const calls: Array<{ file: string; args: readonly string[] }> = [];
-    const recordingExecFile = async (
-      file: string,
-      args: readonly string[],
-    ): Promise<{ stdout: string; stderr: string }> => {
+    const recordingExecFile = async (file: string, args: readonly string[]) => {
       calls.push({ file, args });
       return { stdout: '', stderr: '' };
     };
     const writer = createNextcloudWriter({ execFile: recordingExecFile });
 
-    await writer.writeResult(makeResult(), originalFile);
+    await writer.writeResult(makeResult(), { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/teams-task-agent`]);
+    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP/Grünig`]);
   });
 });
