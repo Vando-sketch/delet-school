@@ -53,10 +53,14 @@ Nextcloud's data directory nor its `occ` binary needs to be reachable from the a
 
 Headless `tailscaled` (no GUI, as on a Linux container) queues incoming Taildrop files
 internally rather than writing them straight to disk — they only land in a real directory once
-something calls `tailscale file get <dir>`. The sidecar container runs a small loop invoking
-`tailscale file get` on an interval (`TAILDROP_POLL_INTERVAL_MS`, default `5000`), writing
-drained files into a directory shared via a Docker volume with the `ingest` container's
-`INGEST_WATCH_DIR`.
+something calls `tailscale file get <dir>`. The official `tailscale/tailscale` image's
+entrypoint (`containerboot`, at `/usr/local/bin/containerboot` — verified against the image's
+own Dockerfile) only handles login/config and doesn't support running an extra background
+process on its own, so the `tailscale` service is built from a small custom image (`FROM
+tailscale/tailscale:latest`) with a wrapper entrypoint script that starts `containerboot` in the
+background, waits for `tailscale status` to succeed, then loops calling `tailscale file get` on
+an interval (`TAILDROP_POLL_INTERVAL_MS`, default `5000`) — writing drained files into a
+directory shared via a Docker volume with the `ingest` container's `INGEST_WATCH_DIR`.
 
 Everything downstream is unchanged: `src/ingest/watcher.ts` keeps watching `INGEST_WATCH_DIR`
 with chokidar exactly as today, with the same zip handling, stability threshold, and
@@ -138,20 +142,26 @@ unchanged, so `worker/index.ts` requires no changes.
 - `NEXTCLOUD_USERNAME` — replaces `NEXTCLOUD_TARGET_USER`; same value, now used both as the
   WebDAV path segment and the Basic Auth username
 - `NEXTCLOUD_APP_PASSWORD`
-- `TS_OAUTH_CLIENT_ID` / `TS_OAUTH_CLIENT_SECRET` — replaces a static `TAILSCALE_AUTHKEY`
+- `TS_AUTHKEY` — holds an OAuth client secret (`tskey-client-...?ephemeral=false`), not a
+  classic static auth key
 - `TAILDROP_POLL_INTERVAL_MS` (default `5000`)
 
-A static auth key (even a "reusable" one) still expires — 90 days by default — unless
+A classic auth key (even a "reusable" one) still expires — 90 days by default — unless
 separately marked non-expiring in the admin console, which reintroduces a manual step this
-design is trying to eliminate. Tailscale's OAuth client credentials are its recommended pattern
-for unattended containers specifically for this reason: the sidecar mints its own short-lived
-keys as needed rather than relying on one static secret staying valid indefinitely.
+design is trying to eliminate. `containerboot` (the official image's entrypoint) reads a single
+`TS_AUTHKEY` variable either way; the difference is *what's in it*. Passing an OAuth client
+secret there (format `tskey-client-...`, from an OAuth client created in the admin console) with
+`?ephemeral=false` gets a persistent node without a static secret that silently expires — this
+is Tailscale's documented recommended pattern for unattended containers. OAuth-issued keys
+require a tag, supplied via `TS_EXTRA_ARGS=--advertise-tags=tag:teams-task-agent` (the
+`tag:teams-task-agent` ACL tag itself is a one-time manual setup step in the tailnet's ACL
+policy, not something the app configures).
 
 ## `docker-compose.yml` changes
 
-- Add a `tailscale` service (`tailscale/tailscale` image) with `TS_OAUTH_CLIENT_ID`/
-  `TS_OAUTH_CLIENT_SECRET`/`TS_HOSTNAME` env, a named volume for `/var/lib/tailscale` state, and
-  a shared volume for the Taildrop drop directory.
+- Add a `tailscale` service (a small custom image built `FROM tailscale/tailscale:latest`, see
+  below) with `TS_AUTHKEY`/`TS_HOSTNAME`/`TS_EXTRA_ARGS` env, a named volume for
+  `/var/lib/tailscale` state, and a shared volume for the Taildrop drop directory.
 - `ingest`, `worker`, **and `redis`** all switch to `network_mode: "service:tailscale"`, and
   `REDIS_URL` becomes `redis://localhost:6379` (already `.env.example`'s existing default).
   This is deliberate, not incidental: `network_mode: "service:tailscale"` shares the sidecar's
