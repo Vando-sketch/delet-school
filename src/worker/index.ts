@@ -1,24 +1,26 @@
 import { promises as fs } from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { Worker, type Job } from 'bullmq';
-import mime from 'mime-types';
 import pino from 'pino';
 import { QUEUE_NAME, getRedisConnection, type FileJobData } from '../queue/index.js';
+import { extractFile } from '../extract/index.js';
 import { createFileProcessor } from '../claude/processFile.js';
+import { buildSolutionMarkdown } from '../pdf/buildMarkdown.js';
+import { renderSolutionPdf } from '../pdf/renderPdf.js';
 import { createNextcloudWriter } from '../nextcloud/writeResult.js';
 import { config } from '../config/index.js';
-import type { DownloadedFile } from '../types.js';
+import type { NextcloudWriteContent } from '../types.js';
 
 const logger = pino({ name: 'worker' });
 
 const fileProcessor = createFileProcessor();
 const nextcloudWriter = createNextcloudWriter();
 
-/**
- * Moves a job's source file out of the ingest watcher's active tree (into `.processed` or
- * `.failed`) so it's never picked up again, then removes the staging directory it came from
- * if that was left empty (zip-extracted files each live in their own staging subdirectory).
- */
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 async function archiveFile(filePath: string, dirName: string): Promise<void> {
   const watchDir = path.resolve(config.ingest.watchDir);
   const destDir = path.join(watchDir, dirName);
@@ -36,21 +38,30 @@ async function handleJob(job: Job<FileJobData>): Promise<void> {
   const { filePath, originalFileName } = job.data;
   logger.info({ jobId: job.id, filePath, originalFileName }, 'processing file job');
 
-  const content = await fs.readFile(filePath);
-  const file: DownloadedFile = {
-    fileName: originalFileName,
-    mimeType: mime.lookup(originalFileName) || 'application/octet-stream',
-    content,
-  };
-
+  let archivalPath = filePath;
   try {
-    const result = await fileProcessor.processFile(file);
-    const { writtenPath } = await nextcloudWriter.writeResult(result, file);
-    await archiveFile(filePath, config.ingest.processedDirName);
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'extract-'));
+    const extraction = await extractFile(filePath, workDir);
+    archivalPath = extraction.archivalPdfPath;
+
+    const result = await fileProcessor.processFile(originalFileName, extraction);
+    const datum = today();
+
+    let content: NextcloudWriteContent;
+    if (result.isMaterialblatt) {
+      content = { kind: 'material', sourcePath: extraction.archivalPdfPath };
+    } else {
+      const markdown = buildSolutionMarkdown(result, datum);
+      const pdfBytes = await renderSolutionPdf(markdown);
+      content = { kind: 'pdf', bytes: pdfBytes };
+    }
+
+    const { writtenPath } = await nextcloudWriter.writeResult(result, content, datum);
+    await archiveFile(archivalPath, config.ingest.processedDirName);
     logger.info({ jobId: job.id, writtenPath, tasksFound: result.tasksFound.length }, 'file job complete');
   } catch (err) {
-    await archiveFile(filePath, config.ingest.failedDirName).catch((archiveErr: unknown) => {
-      logger.error({ archiveErr, filePath }, 'Failed to archive file after processing failure');
+    await archiveFile(archivalPath, config.ingest.failedDirName).catch((archiveErr: unknown) => {
+      logger.error({ archiveErr, filePath: archivalPath }, 'Failed to archive file after processing failure');
     });
     throw err;
   }
