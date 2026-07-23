@@ -43,9 +43,7 @@ describe('extractFile', () => {
       getPageText: async () => {
         throw new Error('should not be called');
       },
-      isQualityText: () => {
-        throw new Error('should not be called');
-      },
+      isQualityText: () => true,
       ocrPdf: async () => {
         throw new Error('should not be called');
       },
@@ -63,6 +61,30 @@ describe('extractFile', () => {
       ranOcr: false,
       archivalPdfPath: filePath,
     });
+  });
+
+  it('rejects a .docx that produces low-quality/empty text, with no OCR fallback to fall back on', async () => {
+    const filePath = path.join(tmpDir, 'scanned-worksheet.docx');
+    await fs.writeFile(filePath, 'irrelevant - convertToMarkdown is stubbed');
+
+    const deps = {
+      getPdfPageCount: async () => {
+        throw new Error('should not be called');
+      },
+      getPageText: async () => {
+        throw new Error('should not be called');
+      },
+      isQualityText: () => false,
+      ocrPdf: async () => {
+        throw new Error('should not be called');
+      },
+      convertToMarkdown: async () => '',
+      renderPageToPng: async () => {
+        throw new Error('should not be called');
+      },
+    };
+
+    await expect(extractFile(filePath, workDir, deps)).rejects.toThrow(/low-quality\/empty text/);
   });
 
   it('rejects unsupported file types', async () => {

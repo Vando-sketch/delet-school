@@ -16,10 +16,10 @@ export interface ExtractDeps {
   renderPageToPng?: typeof renderPageToPng;
 }
 
-const TEXT_EXTENSIONS = new Set(['.txt', '.md']);
+export const TEXT_EXTENSIONS = new Set(['.txt', '.md']);
 // Has a real text layer already (no scans/handwriting), so it skips the OCR/vision pipeline
 // entirely and goes straight through MarkItDown, same as a text-layer PDF's markdown step.
-const MARKITDOWN_DIRECT_EXTENSIONS = new Set(['.docx']);
+export const MARKITDOWN_DIRECT_EXTENSIONS = new Set(['.docx']);
 
 export async function extractFile(
   filePath: string,
@@ -42,6 +42,14 @@ export async function extractFile(
 
   if (MARKITDOWN_DIRECT_EXTENSIONS.has(ext)) {
     const markdown = await toMarkdown(filePath);
+    // Unlike PDFs, a .docx has no page-render path to fall back to OCR/vision for - so a
+    // docx with no real text layer (e.g. a scanned worksheet pasted in as an image) can't be
+    // recovered here. Fail loudly instead of silently handing near-empty text to the classifier.
+    if (!checkQuality(markdown)) {
+      throw new Error(
+        `extract: "${filePath}" produced low-quality/empty text from MarkItDown - likely an image-only .docx with no OCR fallback available`,
+      );
+    }
     return { markdown, visionPages: [], ranOcr: false, archivalPdfPath: filePath };
   }
 
