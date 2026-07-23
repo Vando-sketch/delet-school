@@ -97,8 +97,6 @@ optional (defaults to claude-sonnet-5, since homework-solving requires more reas
   and `NEXTCLOUD_OCC_BIN` environment variables are no longer supported. They have been replaced
   with `NEXTCLOUD_BASE_URL`, `NEXTCLOUD_USERNAME`, and `NEXTCLOUD_APP_PASSWORD` (WebDAV-based).
   Existing `.env` files must be updated to use the new variables.
-- `.docx` extraction is not wired up yet (MarkItDown supports it; the extraction module
-  already routes by file extension, so this is a small follow-up).
 - The OCR-quality gate (`isQualityText` in `src/extract/pdfText.ts`) uses a simple
   alphanumeric-ratio heuristic; a stronger check (e.g. dictionary-based) is a reasonable
   follow-up if it proves too permissive/strict in practice.
