@@ -10,6 +10,7 @@ import { getFileJobQueue, type FileJobData, type SiblingManifestEntry } from '..
 import { createTaildropDrain } from './taildropDrain.js';
 import { buildSiblingManifest } from './siblingManifest.js';
 import { renameOrCopy } from '../lib/renameOrCopy.js';
+import { computeFileHash, isHashSeen, recordHash } from './dedup.js';
 
 const logger = pino({ name: 'ingest-watcher' });
 
@@ -28,10 +29,19 @@ function isZipFile(filePath: string): boolean {
 
 async function enqueueFile(
   queue: FileJobQueueLike,
+  watchDir: string,
   filePath: string,
   originalFileName: string,
   batch?: { batchId: string; siblingManifest: SiblingManifestEntry[] },
 ): Promise<void> {
+  const hash = await computeFileHash(filePath);
+  if (await isHashSeen(hash)) {
+    logger.info({ filePath, originalFileName, hash }, '[ingest] Duplicate file detected via SHA-256 hash...');
+    await archiveFile(watchDir, filePath, config.ingest.processedDirName);
+    return;
+  }
+  await recordHash(hash);
+
   const jobData: FileJobData = {
     filePath,
     originalFileName,
@@ -123,14 +133,14 @@ async function handleZip(queue: FileJobQueueLike, watchDir: string, zipPath: str
         .filter((entry): entry is SiblingManifestEntry => entry !== undefined),
     );
     const originalFileName = `${namePrefix}${path.relative(stagingDir, filePath)}`;
-    await enqueueFile(queue, filePath, originalFileName, { batchId, siblingManifest });
+    await enqueueFile(queue, watchDir, filePath, originalFileName, { batchId, siblingManifest });
   }
 
   await archiveFile(watchDir, zipPath, config.ingest.processedDirName);
 }
 
 async function handlePlainFile(queue: FileJobQueueLike, watchDir: string, filePath: string): Promise<void> {
-  await enqueueFile(queue, filePath, path.relative(watchDir, filePath));
+  await enqueueFile(queue, watchDir, filePath, path.relative(watchDir, filePath));
 }
 
 /**

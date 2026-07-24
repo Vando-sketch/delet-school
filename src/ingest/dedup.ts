@@ -9,8 +9,16 @@ const localHashMemorySet = new Set<string>();
  * Resets the in-memory hash set cache.
  * Intended primarily for unit testing.
  */
-export function resetLocalHashCache(): void {
+export async function resetLocalHashCache(): Promise<void> {
   localHashMemorySet.clear();
+  try {
+    const redis = getRedisConnection();
+    if (redis.status === 'ready') {
+      await redis.del(REDIS_HASH_SET_KEY);
+    }
+  } catch (_err) {
+    // Fallback if Redis is unavailable or errors
+  }
 }
 
 /**
@@ -37,10 +45,12 @@ export async function isHashSeen(hash: string): Promise<boolean> {
   }
   try {
     const redis = getRedisConnection();
-    const isMember = await redis.sismember(REDIS_HASH_SET_KEY, hash);
-    if (isMember === 1) {
-      localHashMemorySet.add(hash);
-      return true;
+    if (redis.status === 'ready') {
+      const isMember = await redis.sismember(REDIS_HASH_SET_KEY, hash);
+      if (isMember === 1) {
+        localHashMemorySet.add(hash);
+        return true;
+      }
     }
   } catch (_err) {
     // Fallback to local memory set if Redis is unavailable or errors
@@ -56,7 +66,9 @@ export async function recordHash(hash: string): Promise<void> {
   localHashMemorySet.add(hash);
   try {
     const redis = getRedisConnection();
-    await redis.sadd(REDIS_HASH_SET_KEY, hash);
+    if (redis.status === 'ready') {
+      await redis.sadd(REDIS_HASH_SET_KEY, hash);
+    }
   } catch (_err) {
     // Fallback if Redis is unavailable or errors
   }

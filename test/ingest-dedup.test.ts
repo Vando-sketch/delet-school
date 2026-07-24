@@ -33,7 +33,7 @@ describe('Content Deduplication Module (dedup)', () => {
   let testFilePath: string;
 
   beforeEach(async () => {
-    resetLocalHashCache();
+    await resetLocalHashCache();
     mockRedisSet.clear();
     redisShouldFail = false;
     vi.clearAllMocks();
