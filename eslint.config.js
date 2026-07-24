@@ -4,7 +4,7 @@ import tsPlugin from '@typescript-eslint/eslint-plugin';
 
 export default [
   {
-    ignores: ['dist/**', 'node_modules/**', '.claude/**', '.worktrees/**', 'worktrees/**', '.superpowers/**'],
+    ignores: ['dist/**', 'node_modules/**', '.claude/**', '.agents/**', '.worktrees/**', 'worktrees/**', '.superpowers/**'],
   },
   {
     files: ['**/*.ts'],
