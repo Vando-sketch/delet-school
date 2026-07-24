@@ -1,7 +1,7 @@
 # Extraction & Vision PDF Pipeline Performance Design
 
 **Date**: 2026-07-24  
-**Status**: Approved  
+**Status**: Approved (Incorporated Review Feedback)  
 **Topic**: Optimizing PDF text extraction, Vision page rendering, and dictionary loading performance in `delet-school`.
 
 ---
@@ -23,7 +23,7 @@ The extraction pipeline (`src/extract/`) processes incoming PDF documents, Word 
 
 ---
 
-## 2. Architecture & Detailed Design
+## 2. Architecture & Detailed Design (Refined based on Code Review)
 
 ### Component 1: Single-Pass Poppler Extraction (`src/extract/pdfText.ts`)
 
@@ -35,48 +35,59 @@ The extraction pipeline (`src/extract/`) processes incoming PDF documents, Word 
     execFile: ExecFileFn = defaultExecFile,
   ): Promise<string[]>
   ```
-- **Execution Flow**:
+- **Execution & Trailing Form-Feed (`\f`) Protocol**:
   1. Spawns `pdftotext <pdfPath> -` **once** for the entire PDF document.
-  2. Poppler separates page text in standard stdout using form-feed characters (`\f` / `\x0c`).
-  3. Splits stdout by `/\f/g` to obtain a string array corresponding to each page.
-  4. If the resulting array length matches `pageCount`, returns the array directly.
-  5. **Fallback Safety**: If form-feed count does not match `pageCount` or `pdftotext` single-pass fails, gracefully falls back to `Promise.all(pageNumbers.map(p => getPageText(pdfPath, p)))`.
+  2. Ensures **100% Flag Parity** with `getPageText` (passing `[pdfPath, '-']` to `pdftotextBin`).
+  3. **Trailing `\f` Handling**: Poppler appends `\f` after every page, including the last page. `stdout.split(/\f/)` on $N$ pages produces $N+1$ items where item $N+1$ is empty/whitespace.
+     - Before length validation, inspect `rawPages`: if `rawPages.length === pageCount + 1` and `rawPages[pageCount].trim() === ''`, pop the trailing empty string.
+  4. **Length Verification**:
+     - If `pages.length === pageCount`, return `pages`.
+  5. **Fallback Safety**: If `pages.length !== pageCount` or `pdftotext` single-pass fails, fall back to `Promise.all(pageNumbers.map(p => getPageText(pdfPath, p)))`.
 - **`ExtractDeps` Injection**:
   Export `getAllPagesText` and add `getAllPagesText?: typeof getAllPagesText` to `ExtractDeps` in `src/extract/index.ts`.
 
 ### Component 2: Bounded Parallel Vision Page Rendering (`src/extract/index.ts`)
 
-- **Concurrency Bound**: `MAX_CONCURRENT_PAGE_RENDERS = 4`.
-- **Implementation**:
-  Replace sequential `for (const pageNumber of visionPageNumbers)` loop with a bounded parallel helper (chunking `visionPageNumbers` into batches of up to 4 pages executed via `Promise.all`).
-- **Result Ordering**: Maintains exact page index order in the returned `visionPages` array.
+- **Configurable Concurrency**:
+  - `MAX_CONCURRENT_PAGE_RENDERS` defaults to `Math.min(4, Math.max(1, os.cpus().length))`, configurable via `process.env.MAX_CONCURRENT_PAGE_RENDERS`.
+- **Sliding Window Concurrency Queue**:
+  - Implement a lightweight async pool (semaphore queue) rather than fixed batches. As soon as one page rendering promise resolves, the next pending page immediately starts without waiting for slower peer pages in a batch.
+- **Result Ordering**: Preserves exact 1-to-1 page index order in the returned `visionPages` array.
 
 ### Component 3: Optimized Hunspell Parsing & Caching (`src/extract/dictionary.ts`)
 
-- **Module-Level Caching**:
-  Maintain a module-scoped `const cachedWordSets = new Map<string, Set<string>>()`.
-  When `loadWordSet(deps)` is called with default parameters, return the cached `Set<string>` directly.
-- **Regex Line Parsing**:
-  Replace `.split('\n')` and `.split('/')` with a regex matching loop:
-  ```ts
-  const WORD_PATTERN = /^([^\/\s\r\n]+)/gm;
-  ```
-  Iterate matches via `WORD_PATTERN.exec(contents)` to populate the word set without intermediate line arrays.
+- **Cache-Key for `loadWordSet`**:
+  - Maintain a module-scoped map `cachedWordSets = new Map<string, Set<string>>()`.
+  - Cache key is generated from sorted dictionary file paths (`dicPaths.join(':')`). When `loadWordSet` is called with identical paths, the cached `Set<string>` is returned immediately.
+- **Header Line & Regex Parsing**:
+  - Hunspell `.dic` files start with an entry count line (e.g. `318520`).
+  - Strip the first line before scanning words:
+    ```ts
+    const firstNewlineIndex = contents.indexOf('\n');
+    const body = firstNewlineIndex !== -1 ? contents.slice(firstNewlineIndex + 1) : contents;
+    ```
+  - Parse words using regex line scanning without allocating line arrays:
+    ```ts
+    const WORD_PATTERN = /^([^\/\s\r\n]+)/gm;
+    ```
+  - Extract words directly into `words.add(word.toLowerCase())`.
 
 ---
 
 ## 3. Testing & Verification Plan
 
-### Automated Tests
-1. **Unit Tests for `getAllPagesText`**:
-   - Test single-pass form-feed splitting with mock stdout.
-   - Test fallback to `getPageText` when page count mismatches.
-2. **Unit Tests for Bounded Vision Rendering**:
-   - Verify `extractFile` handles multiple vision pages concurrently and preserves page order.
-3. **Unit Tests for Dictionary Caching & Parsing**:
-   - Verify `loadWordSet` returns identical cached set on subsequent calls.
-   - Verify regex parsing matches expected Hunspell word entries.
-4. **Full Test Suite & Typecheck**:
+### Automated & Benchmark Tests
+1. **Trailing `\f` Unit Test with Real `pdftotext` Output**:
+   - Test single-pass form-feed splitting with real `pdftotext` stdout output (including trailing `\f`).
+   - Verify fast path is taken without falling back to per-page extraction.
+2. **Flag Parity Verification**:
+   - Verify stdout from `getAllPagesText` matches page-by-page `getPageText` output character-for-character.
+3. **Dictionary Header & Multi-Path Cache Tests**:
+   - Verify dictionary header count (e.g. `318520`) is excluded from the word Set.
+   - Test multiple distinct dictionary path keys in `loadWordSet`.
+4. **Performance Benchmark Test**:
+   - Benchmark multi-page PDF processing before and after refactoring, verifying child process calls drop from $N$ to $1$.
+5. **Full Test Suite & Linting**:
    - Run `npm run typecheck`, `npm run lint`, and `npm test` (Vitest).
 
 ---
