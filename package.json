@@ -1,5 +1,5 @@
 {
-  "name": "teams-task-agent",
+  "name": "delet-school",
   "version": "0.1.0",
   "description": "Watches a local folder for manually-downloaded files (zips, PDFs, etc.), processes them with the Claude Agent SDK to find and solve open tasks, and distributes the result to Nextcloud.",
   "private": true,

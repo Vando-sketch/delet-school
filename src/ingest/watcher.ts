@@ -9,6 +9,7 @@ import { config } from '../config/index.js';
 import { getFileJobQueue, type FileJobData, type SiblingManifestEntry } from '../queue/index.js';
 import { createTaildropDrain } from './taildropDrain.js';
 import { buildSiblingManifest } from './siblingManifest.js';
+import { renameOrCopy } from '../lib/renameOrCopy.js';
 
 const logger = pino({ name: 'ingest-watcher' });
 
@@ -75,12 +76,12 @@ async function listFilesRecursive(dir: string): Promise<string[]> {
   return files;
 }
 
-/** Moves a fully-handled top-level file into `watchDir/dirName`, timestamp-prefixed to avoid collisions. */
+/** Moves a fully-handled file into `watchDir/dirName`, timestamp-prefixed to avoid collisions. */
 async function archiveFile(watchDir: string, filePath: string, dirName: string): Promise<void> {
   const destDir = path.join(watchDir, dirName);
   await fs.mkdir(destDir, { recursive: true });
   const dest = path.join(destDir, `${Date.now()}-${path.basename(filePath)}`);
-  await fs.rename(filePath, dest);
+  await renameOrCopy(filePath, dest);
 }
 
 /**
@@ -101,6 +102,12 @@ async function handleZip(queue: FileJobQueueLike, watchDir: string, zipPath: str
     logger.warn({ zipPath }, 'Zip archive contained no files; nothing to enqueue');
   }
 
+  // A zip dropped into a subfolder (e.g. watchDir/Mathe/export.zip) prefixes its own subfolder
+  // path onto every extracted file's originalFileName, same rule as a plain file dropped there
+  // directly - "." (zip was at the top level) contributes no prefix.
+  const zipRelativeDir = path.dirname(path.relative(watchDir, zipPath));
+  const namePrefix = zipRelativeDir === '.' ? '' : `${zipRelativeDir}${path.sep}`;
+
   // Captured once upfront, before any file in the batch can be archived away by the worker -
   // every job embeds its siblings' excerpts directly rather than reading them live off disk later.
   const batchId = randomUUID();
@@ -115,14 +122,15 @@ async function handleZip(queue: FileJobQueueLike, watchDir: string, zipPath: str
         .map((other) => manifestByPath.get(other))
         .filter((entry): entry is SiblingManifestEntry => entry !== undefined),
     );
-    await enqueueFile(queue, filePath, path.relative(stagingDir, filePath), { batchId, siblingManifest });
+    const originalFileName = `${namePrefix}${path.relative(stagingDir, filePath)}`;
+    await enqueueFile(queue, filePath, originalFileName, { batchId, siblingManifest });
   }
 
   await archiveFile(watchDir, zipPath, config.ingest.processedDirName);
 }
 
-async function handlePlainFile(queue: FileJobQueueLike, filePath: string): Promise<void> {
-  await enqueueFile(queue, filePath, path.basename(filePath));
+async function handlePlainFile(queue: FileJobQueueLike, watchDir: string, filePath: string): Promise<void> {
+  await enqueueFile(queue, filePath, path.relative(watchDir, filePath));
 }
 
 /**
@@ -136,26 +144,32 @@ export function createIngestWatcher(options: CreateIngestWatcherOptions = {}): F
   const watchDir = path.resolve(options.watchDir ?? config.ingest.watchDir);
   mkdirSync(watchDir, { recursive: true });
 
-  const ignoredDirs = [config.ingest.processedDirName, config.ingest.failedDirName, config.ingest.stagingDirName].map(
-    (name) => path.join(watchDir, name),
-  );
+  const ignoredNames = new Set([
+    config.ingest.processedDirName,
+    config.ingest.failedDirName,
+    config.ingest.stagingDirName,
+  ]);
 
   const watcher = chokidarWatch(watchDir, {
     ignoreInitial: false,
-    // Top-level dot-directories (.processed/.failed/.staging) hold this watcher's own
-    // output and must never be re-ingested.
-    ignored: (candidate) => ignoredDirs.some((dir) => candidate === dir || candidate.startsWith(dir + path.sep)),
+    // .processed/.failed/.staging hold this watcher's own output and must never be
+    // re-ingested, wherever they occur - not just at the top level, now that subfolders are
+    // watched too. Split on /[/\\]/ rather than the OS-native path.sep alone - chokidar
+    // normalizes candidate paths to forward slashes internally regardless of host OS.
+    ignored: (candidate) => {
+      const rel = path.relative(watchDir, candidate);
+      return rel.split(/[/\\]/).some((segment) => ignoredNames.has(segment));
+    },
     // Files land here via copy/upload/sync, which can take a moment; wait for the file
     // size to stop changing before treating it as "added" so partial files aren't ingested.
     awaitWriteFinish: {
       stabilityThreshold: config.ingest.stabilityThresholdMs,
       pollInterval: 100,
     },
-    depth: 0,
   });
 
   watcher.on('add', (filePath) => {
-    void (isZipFile(filePath) ? handleZip(queue, watchDir, filePath) : handlePlainFile(queue, filePath)).catch(
+    void (isZipFile(filePath) ? handleZip(queue, watchDir, filePath) : handlePlainFile(queue, watchDir, filePath)).catch(
       (err: unknown) => {
         logger.error({ err, filePath }, 'Failed to ingest file');
       },

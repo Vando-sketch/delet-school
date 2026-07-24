@@ -1,4 +1,4 @@
-# teams-task-agent
+# delet-school
 
 Watches a local `__INBOX__` folder for manually-downloaded files (e.g. a zip export of a
 Teams channel's files, or individual PDFs/docs — including scans and handwritten
@@ -36,8 +36,9 @@ Worker
 
 ## Layout
 
-- `src/ingest/` — watches a local folder (chokidar) for dropped files; extracts zip archives
-  and enqueues one job per contained file, or enqueues a single job for any other file directly.
+- `src/ingest/` — watches a local folder and its subfolders (chokidar) for dropped files;
+  extracts zip archives and enqueues one job per contained file, or enqueues a single job for
+  any other file directly.
 - `src/queue/` — BullMQ queue/connection shared by the ingest watcher and worker.
 - `src/extract/` — per-page tiered text extraction: MarkItDown for text-layer PDFs,
   `ocrmypdf`/Tesseract for scans, rendered page images for Claude's vision fallback on
@@ -97,8 +98,6 @@ optional (defaults to claude-sonnet-5, since homework-solving requires more reas
   and `NEXTCLOUD_OCC_BIN` environment variables are no longer supported. They have been replaced
   with `NEXTCLOUD_BASE_URL`, `NEXTCLOUD_USERNAME`, and `NEXTCLOUD_APP_PASSWORD` (WebDAV-based).
   Existing `.env` files must be updated to use the new variables.
-- The OCR-quality gate (`isQualityText` in `src/extract/pdfText.ts`) uses a simple
-  alphanumeric-ratio heuristic; a stronger check (e.g. dictionary-based) is a reasonable
-  follow-up if it proves too permissive/strict in practice.
-- The ingest watcher watches only the top level of `INGEST_WATCH_DIR` (no subfolders) and
-  assumes a local/POSIX filesystem.
+- The OCR-quality gate's dictionary-ratio threshold (0.45, `src/extract/pdfText.ts`) is a
+  starting point, not empirically tuned; adjusting it against real scanned/handwritten homework
+  is expected follow-up once this is in regular use.

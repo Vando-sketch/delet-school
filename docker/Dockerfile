@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for teams-task-agent ingest and worker services
+# Multi-stage Dockerfile for delet-school ingest and worker services
 # Both services use the same image with different entrypoint commands (supplied via docker-compose)
 #
 # Debian slim (not Alpine) - ocrmypdf/markitdown/weasyprint's native dependencies (Ghostscript,
@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-deu \
     tesseract-ocr-eng \
+    hunspell-de-de \
+    hunspell-en-us \
     pandoc \
     fonts-liberation \
     python3 \

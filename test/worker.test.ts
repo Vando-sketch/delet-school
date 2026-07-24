@@ -185,6 +185,30 @@ describe('worker pipeline', () => {
     expect(rmdir).toHaveBeenCalledWith('/inbox/.staging/uuid-1');
   });
 
+  it('does not prune a subfolder a file was dropped into directly - only .staging dirs get pruned', async () => {
+    extractFile.mockResolvedValue({
+      markdown: '# text',
+      visionPages: [],
+      ranOcr: false,
+      archivalPdfPath: '/inbox/Mathe/AB1.pdf',
+    });
+    processFile.mockResolvedValue({ ...AUFGABENBLATT_RESULT, originalFileName: 'Mathe/AB1.pdf' });
+    buildSolutionMarkdown.mockReturnValue('# solution markdown');
+    renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
+    writeResult.mockResolvedValue({ writtenPath: '/data/x.pdf' });
+
+    const { createFileJobWorker } = await import('../src/worker/index.js');
+    const { Worker } = await import('bullmq');
+    createFileJobWorker();
+
+    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+    const job = { id: '1', data: { filePath: '/inbox/Mathe/AB1.pdf', originalFileName: 'Mathe/AB1.pdf', receivedAt: 'now' } };
+    await handler(job);
+
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(rmdir).not.toHaveBeenCalled();
+  });
+
   it('passes the job\'s siblingManifest through to the file processor when present', async () => {
     extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/.staging/uuid-2/a.txt' });
     processFile.mockResolvedValue({ ...MATERIAL_RESULT, originalFileName: 'a.txt' });

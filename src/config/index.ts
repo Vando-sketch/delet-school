@@ -82,4 +82,8 @@ export const config = {
     cssPath: optional('PANDOC_CSS_PATH', '/app/vorlage/style.css'),
     weasyprintBinary: optional('WEASYPRINT_BIN', '/app/.venv/bin/weasyprint'),
   },
+  dictionary: {
+    deDicPath: optional('HUNSPELL_DE_DIC_PATH', '/usr/share/hunspell/de_DE.dic'),
+    enDicPath: optional('HUNSPELL_EN_DIC_PATH', '/usr/share/hunspell/en_US.dic'),
+  },
 };
