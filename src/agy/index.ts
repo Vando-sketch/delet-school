@@ -50,7 +50,6 @@ export const defaultSubprocessRunner: AgySubprocessRunner = (command, args, opti
     }
 
     let stdout = '';
-    let stderr = '';
     let killedByTimeout = false;
     let sigkillTimer: NodeJS.Timeout | undefined;
     let timeoutTimer: NodeJS.Timeout | undefined;
@@ -68,13 +67,11 @@ export const defaultSubprocessRunner: AgySubprocessRunner = (command, args, opti
       }, timeoutMs);
     }
 
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
+    if (child.stdout) {
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+    }
 
     child.on('error', (err) => {
       if (timeoutTimer) clearTimeout(timeoutTimer);
