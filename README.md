@@ -1,4 +1,4 @@
-# teams-task-agent
+# delet-school
 
 Watches a local `__INBOX__` folder for manually-downloaded files (e.g. a zip export of a
 Teams channel's files, or individual PDFs/docs — including scans and handwritten

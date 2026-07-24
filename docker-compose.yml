@@ -5,11 +5,11 @@ services:
     build:
       context: .
       dockerfile: docker/tailscale/Dockerfile
-    container_name: teams-task-agent-tailscale
-    hostname: ${TS_HOSTNAME:-teams-task-agent}
+    container_name: delet-school-tailscale
+    hostname: ${TS_HOSTNAME:-delet-school}
     environment:
       - TS_AUTHKEY=${TS_AUTHKEY}
-      - TS_EXTRA_ARGS=--advertise-tags=tag:teams-task-agent
+      - TS_EXTRA_ARGS=--advertise-tags=tag:delet-school
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=false
       - TAILDROP_STAGING_DIR=${TAILDROP_STAGING_DIR:-/taildrop-staging}
@@ -31,7 +31,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: teams-task-agent-redis
+    container_name: delet-school-redis
     command: redis-server --appendonly yes
     # Shares the tailscale sidecar's network namespace (see the `ingest`/`worker` comment
     # below) - reached at localhost:6379 from there, not via Compose's `redis` DNS name.
@@ -52,7 +52,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: teams-task-agent-ingest
+    container_name: delet-school-ingest
     command: npm run start:ingest
     env_file: .env
     environment:
@@ -82,7 +82,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: teams-task-agent-worker
+    container_name: delet-school-worker
     command: npm run start:worker
     env_file: .env
     environment:
