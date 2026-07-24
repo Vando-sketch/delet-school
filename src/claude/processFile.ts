@@ -24,7 +24,7 @@ const logger = pino({ name: 'claude-file-processor' });
  * string, per the SDK's streaming input mode.
  */
 
-type QueryFn = (params: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }) => AsyncIterable<SDKMessage>;
+export type QueryFn = (params: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }) => AsyncIterable<SDKMessage>;
 type ReadImageFileFn = (path: string) => Promise<Buffer>;
 
 // Typed against FachKey so a rename/removal of either key in src/fach.ts fails to compile here
@@ -76,13 +76,21 @@ gib ein leeres "tasksFound"-Array zurück.
 
 Antworte ausschließlich mit dem im Schema beschriebenen JSON.`;
 
-const RESULT_JSON_SCHEMA = {
+const PASS1_JSON_SCHEMA = {
   type: 'object',
   properties: {
     isMaterialblatt: { type: 'boolean', description: 'true wenn das Dokument keine zu lösenden Aufgaben enthält.' },
     fach: { type: 'string', enum: [...FACH_KEYS], description: 'Fester Fach-Schlüssel.' },
     lernfeld: { type: 'string', description: 'Optionales Kapitel/Lernfeld, falls im Dokument erkennbar.' },
     thema: { type: 'string', description: 'Kurzes Thema des Dokuments.' },
+  },
+  required: ['isMaterialblatt', 'fach', 'thema'],
+  additionalProperties: false,
+} as const;
+
+const PASS2_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
     tasksFound: {
       type: 'array',
       description: 'Jede gefundene Aufgabe mit vollständiger Lösung. Leer bei einem Materialblatt.',
@@ -99,7 +107,7 @@ const RESULT_JSON_SCHEMA = {
       },
     },
   },
-  required: ['isMaterialblatt', 'fach', 'thema', 'tasksFound'],
+  required: ['tasksFound'],
   additionalProperties: false,
 } as const;
 
@@ -164,26 +172,41 @@ function parseModelJson(rawText: string, fileName: string): unknown {
   }
 }
 
-function validateShape(raw: unknown, fileName: string): ProcessedFileResult {
+function validateShapePass1(raw: unknown, fileName: string) {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" was not a JSON object.`);
+    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 1) was not a JSON object.`);
   }
   const obj = raw as Record<string, unknown>;
 
   if (typeof obj.isMaterialblatt !== 'boolean') {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" is missing "isMaterialblatt".`);
+    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 1) is missing "isMaterialblatt".`);
   }
   if (typeof obj.fach !== 'string' || !(FACH_KEYS as readonly string[]).includes(obj.fach)) {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" has an invalid "fach".`);
+    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 1) has an invalid "fach".`);
   }
   if (typeof obj.thema !== 'string') {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" is missing "thema".`);
-  }
-  if (!Array.isArray(obj.tasksFound)) {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" is missing a "tasksFound" array.`);
+    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 1) is missing "thema".`);
   }
 
-  const tasksFound: TaskSolution[] = obj.tasksFound.map((task, index) => {
+  return {
+    isMaterialblatt: obj.isMaterialblatt,
+    fach: obj.fach as FachKey,
+    ...(typeof obj.lernfeld === 'string' ? { lernfeld: obj.lernfeld } : {}),
+    thema: obj.thema,
+  };
+}
+
+function validateShapePass2(raw: unknown, fileName: string): TaskSolution[] {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 2) was not a JSON object.`);
+  }
+  const obj = raw as Record<string, unknown>;
+
+  if (!Array.isArray(obj.tasksFound)) {
+    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 2) is missing a "tasksFound" array.`);
+  }
+
+  return obj.tasksFound.map((task, index) => {
     if (typeof task !== 'object' || task === null || Array.isArray(task)) {
       throw new Error(`claude/processFile: task at index ${index} for "${fileName}" is not an object.`);
     }
@@ -198,15 +221,6 @@ function validateShape(raw: unknown, fileName: string): ProcessedFileResult {
       ...(typeof t.quelle === 'string' ? { quelle: t.quelle } : {}),
     };
   });
-
-  return {
-    originalFileName: fileName,
-    isMaterialblatt: obj.isMaterialblatt,
-    fach: obj.fach as FachKey,
-    ...(typeof obj.lernfeld === 'string' ? { lernfeld: obj.lernfeld } : {}),
-    thema: obj.thema,
-    tasksFound,
-  };
 }
 
 export interface CreateFileProcessorOptions {
@@ -232,46 +246,106 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       const prompt: string | AsyncIterable<SDKUserMessage> =
         extraction.visionPages.length > 0 ? buildVisionPrompt(promptText, extraction.visionPages, readImageFile) : promptText;
 
-      logger.info({ fileName, visionPages: extraction.visionPages.length }, 'Sending file to Claude for solving');
+      logger.info({ fileName, visionPages: extraction.visionPages.length }, 'Sending file to Claude for Pass 1 (Classification)');
 
-      let resultMessage: Extract<SDKMessage, { type: 'result' }> | undefined;
+      let resultMessage1: Extract<SDKMessage, { type: 'result' }> | undefined;
 
       for await (const message of queryFn({
         prompt,
         options: {
           systemPrompt: SYSTEM_PROMPT,
-          model: config.anthropic.model,
+          model: 'claude-3-5-haiku-latest',
           tools: [],
           maxTurns: 3,
-          outputFormat: { type: 'json_schema', schema: RESULT_JSON_SCHEMA },
+          outputFormat: { type: 'json_schema', schema: PASS1_JSON_SCHEMA },
         },
       })) {
         if (message.type === 'system' && message.subtype === 'init') {
-          logger.info({ fileName, apiKeySource: message.apiKeySource }, 'Claude Agent SDK session started');
+          logger.info({ fileName, apiKeySource: message.apiKeySource }, 'Claude Agent SDK session started (Pass 1)');
         }
         if (message.type === 'result') {
-          resultMessage = message;
+          resultMessage1 = message;
         }
       }
 
-      if (!resultMessage) {
-        logger.error({ fileName }, 'Claude Agent SDK query produced no result message');
-        throw new Error(`claude/processFile: received no result from Claude for "${fileName}".`);
+      if (!resultMessage1) {
+        logger.error({ fileName }, 'Claude Agent SDK query produced no result message for Pass 1');
+        throw new Error(`claude/processFile: received no result from Claude for "${fileName}" (Pass 1).`);
       }
 
-      if (resultMessage.subtype !== 'success') {
-        logger.error({ fileName, subtype: resultMessage.subtype, errors: resultMessage.errors }, 'Claude Agent SDK query did not succeed');
+      if (resultMessage1.subtype !== 'success') {
+        logger.error({ fileName, subtype: resultMessage1.subtype, errors: resultMessage1.errors }, 'Claude Agent SDK query did not succeed for Pass 1');
         throw new Error(
-          `claude/processFile: Claude query failed for "${fileName}" (${resultMessage.subtype}): ${resultMessage.errors?.join('; ') ?? 'unknown error'}`,
+          `claude/processFile: Claude query failed for "${fileName}" (Pass 1) (${resultMessage1.subtype}): ${resultMessage1.errors?.join('; ') ?? 'unknown error'}`,
         );
       }
 
-      const raw = resultMessage.structured_output ?? parseModelJson(resultMessage.result, fileName);
-      const result = validateShape(raw, fileName);
+      const pass1Raw = resultMessage1.structured_output ?? parseModelJson(resultMessage1.result, fileName);
+      const pass1Result = validateShapePass1(pass1Raw, fileName);
 
-      logger.info({ fileName, isMaterialblatt: result.isMaterialblatt, tasksFound: result.tasksFound.length }, 'Claude solve complete');
+      if (pass1Result.isMaterialblatt) {
+        logger.info({ fileName, isMaterialblatt: true }, 'Claude solve complete (Materialblatt, skipping Pass 2)');
+        return {
+          originalFileName: fileName,
+          isMaterialblatt: true,
+          fach: pass1Result.fach,
+          thema: pass1Result.thema,
+          ...(pass1Result.lernfeld ? { lernfeld: pass1Result.lernfeld } : {}),
+          tasksFound: [],
+        };
+      }
 
-      return result;
+      logger.info({ fileName }, 'File contains tasks, starting Pass 2 (Solving)');
+
+      const pass2PromptText = promptText + `\n\nHinweis aus Pass 1: Fach=${pass1Result.fach}, Thema=${pass1Result.thema}. Bitte Aufgaben lösen.`;
+      const pass2Prompt: string | AsyncIterable<SDKUserMessage> =
+        extraction.visionPages.length > 0 ? buildVisionPrompt(pass2PromptText, extraction.visionPages, readImageFile) : pass2PromptText;
+
+      let resultMessage2: Extract<SDKMessage, { type: 'result' }> | undefined;
+
+      for await (const message of queryFn({
+        prompt: pass2Prompt,
+        options: {
+          systemPrompt: SYSTEM_PROMPT,
+          model: config.anthropic.model,
+          tools: [],
+          maxTurns: 3,
+          outputFormat: { type: 'json_schema', schema: PASS2_JSON_SCHEMA },
+        },
+      })) {
+        if (message.type === 'system' && message.subtype === 'init') {
+          logger.info({ fileName }, 'Claude Agent SDK session started (Pass 2)');
+        }
+        if (message.type === 'result') {
+          resultMessage2 = message;
+        }
+      }
+
+      if (!resultMessage2) {
+        logger.error({ fileName }, 'Claude Agent SDK query produced no result message for Pass 2');
+        throw new Error(`claude/processFile: received no result from Claude for "${fileName}" (Pass 2).`);
+      }
+
+      if (resultMessage2.subtype !== 'success') {
+        logger.error({ fileName, subtype: resultMessage2.subtype, errors: resultMessage2.errors }, 'Claude Agent SDK query did not succeed for Pass 2');
+        throw new Error(
+          `claude/processFile: Claude query failed for "${fileName}" (Pass 2) (${resultMessage2.subtype}): ${resultMessage2.errors?.join('; ') ?? 'unknown error'}`,
+        );
+      }
+
+      const pass2Raw = resultMessage2.structured_output ?? parseModelJson(resultMessage2.result, fileName);
+      const tasksFound = validateShapePass2(pass2Raw, fileName);
+
+      logger.info({ fileName, isMaterialblatt: false, tasksFound: tasksFound.length }, 'Claude solve complete');
+
+      return {
+        originalFileName: fileName,
+        isMaterialblatt: false,
+        fach: pass1Result.fach,
+        thema: pass1Result.thema,
+        ...(pass1Result.lernfeld ? { lernfeld: pass1Result.lernfeld } : {}),
+        tasksFound,
+      };
     },
   };
 }

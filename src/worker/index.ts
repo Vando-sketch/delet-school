@@ -96,6 +96,7 @@ async function handleJob(job: Job<FileJobData>): Promise<void> {
 export function createFileJobWorker(): Worker<FileJobData> {
   const worker = new Worker<FileJobData>(QUEUE_NAME, handleJob, {
     connection: getRedisConnection(),
+    concurrency: config.worker.concurrency,
   });
 
   worker.on('failed', (job, err) => {

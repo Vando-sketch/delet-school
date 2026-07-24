@@ -36,6 +36,9 @@ export const config = {
     // enqueuing a partially-copied/uploaded file). Passed to chokidar's awaitWriteFinish.
     stabilityThresholdMs: Number(optional('INGEST_STABILITY_THRESHOLD_MS', '2000')),
   },
+  worker: {
+    concurrency: Number(optional('WORKER_CONCURRENCY', '1')),
+  },
   anthropic: {
     // No fallback default: leaving ANTHROPIC_API_KEY unset is valid and expected when the
     // Claude Agent SDK subprocess is authenticated via a Claude Pro/Max subscription login
