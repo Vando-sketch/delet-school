@@ -1,0 +1,2999 @@
+# Review package: 8d8e4af0cb9add41bb6de4a444078eca7c643c50..HEAD
+
+## Commits
+d4d7c1f chore: remove dead mime-types dependency, fix stale docs from final review
+58424b5 fix: remove the original source file from the inbox when the OCR'd version was archived instead
+99f918a docs: update README for the PDF-solve pipeline
+2482f03 build: switch Docker base to Debian slim, add PDF/OCR/pandoc toolchain
+83311e0 fix: keep extraction scratch dir on the same filesystem as the watch dir, clean it up unconditionally
+a055b8b feat: wire extraction -> solve -> PDF generation/material routing -> archive in the worker
+8a180a3 feat: route Nextcloud writes by Fach/Lernfeld with date-suffixed filenames
+2f82b32 feat: rewrite Claude solve step for Fach classification, Materialblatt routing, and vision fallback
+1f3247f fix: treat empty-string optional env vars as unset in config loader
+b84e370 test: cover cleanup-on-failure path in renderSolutionPdf
+34fd09b feat: render solution markdown to PDF bytes via pandoc+weasyprint
+0a2815d feat: build pandoc-ready solution markdown from ProcessedFileResult
+cdf7332 fix: restore missing header comment in pandoc template.html
+8face5c feat: add pandoc template and Style E stylesheet for solution PDFs
+cf72e97 feat: add per-page tiered PDF extraction orchestrator
+8086f19 fix: prevent page-number prefix collision in vision-page file matching
+f7773fd feat: add pdftoppm wrapper for rendering vision-fallback page images
+1419c8a feat: add MarkItDown CLI wrapper for structured text extraction
+5844ff6 feat: add ocrmypdf wrapper for scanned-PDF extraction
+674ed90 feat: add per-page PDF text extraction and OCR-quality gate
+e88e7fd feat: add pandoc-safe escaping for LLM-authored markdown content
+b78d71d feat: add Fach enum, student config, and extraction-pipeline types
+872d4d4 refactor: extract shared ExecFileFn helper for subprocess injection
+
+## Files changed
+ .env.example                    |  24 +++-
+ README.md                       |  72 ++++++-----
+ docker/Dockerfile               |  45 ++++---
+ docker/vorlage/style.css        |  95 +++++++++++++++
+ docker/vorlage/template.html    |  18 +++
+ package-lock.json               |  11 +-
+ package.json                    |   2 -
+ src/claude/processFile.ts       | 259 +++++++++++++++++-----------------------
+ src/config/index.ts             |  33 ++++-
+ src/extract/index.ts            |  77 ++++++++++++
+ src/extract/markitdown.ts       |   7 ++
+ src/extract/ocr.ts              |  18 +++
+ src/extract/pdfText.ts          |  43 +++++++
+ src/extract/renderPage.ts       |  50 ++++++++
+ src/fach.ts                     |  30 +++++
+ src/lib/execFile.ts             |   9 ++
+ src/nextcloud/writeResult.ts    |  89 ++++++--------
+ src/pdf/buildMarkdown.ts        |  49 ++++++++
+ src/pdf/escape.ts               |  14 +++
+ src/pdf/renderPdf.ts            |  43 +++++++
+ src/types.ts                    |  35 ++++--
+ src/worker/index.ts             |  65 +++++++---
+ test/config.test.ts             |  39 ++++++
+ test/extract/index.test.ts      | 127 ++++++++++++++++++++
+ test/extract/markitdown.test.ts |  17 +++
+ test/extract/ocr.test.ts        |  21 ++++
+ test/extract/pdfText.test.ts    |  49 ++++++++
+ test/extract/renderPage.test.ts |  44 +++++++
+ test/nextcloudWriter.test.ts    | 104 ++++++++--------
+ test/pdf/buildMarkdown.test.ts  | 105 ++++++++++++++++
+ test/pdf/escape.test.ts         |  30 +++++
+ test/pdf/renderPdf.test.ts      |  77 ++++++++++++
+ test/processFile.test.ts        | 157 ++++++++++++++----------
+ test/worker.test.ts             | 168 +++++++++++++++++++-------
+ 34 files changed, 1561 insertions(+), 465 deletions(-)
+
+## Diff
+diff --git a/.env.example b/.env.example
+index c159bda..a755586 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,33 +1,51 @@
+ # Redis (job queue)
+ REDIS_URL=redis://localhost:6379
+ 
+ # Ingest watcher - folder watched for manually-downloaded files (zips, PDFs, etc.)
+ # Point this at a Nextcloud-synced folder (e.g. one you upload exported Teams files into from
+ # your phone/browser) to get "drop a file in Nextcloud, it gets processed" with no extra step.
+ # Must be an absolute path: this is the path as seen by the worker process, whether run
+ # directly (`npm run dev:worker`) or in Docker (where it's also the in-container mount point -
+ # see INGEST_WATCH_DIR_HOST in docker-compose.yml for the host-side source of that mount).
+-INGEST_WATCH_DIR=/app/inbox
++# Default changed to __INBOX__ to match the naming convention of the prior schule-loesen skill.
++INGEST_WATCH_DIR=/app/__INBOX__
+ # Subfolders of INGEST_WATCH_DIR that handled files are moved into - never point these outside
+ # INGEST_WATCH_DIR, and don't drop files directly into them.
+ INGEST_PROCESSED_DIRNAME=.processed
+ INGEST_FAILED_DIRNAME=.failed
+ INGEST_STAGING_DIRNAME=.staging
+ # Milliseconds a dropped file must sit unmodified before it's treated as fully written
+ # (avoids ingesting a file mid-copy/mid-upload).
+ INGEST_STABILITY_THRESHOLD_MS=2000
+ 
+ # Claude Agent SDK
+ # Optional: only needed for API-key billing. Leave unset to authenticate the Claude Agent
+ # SDK subprocess via a Claude Pro/Max subscription login instead (run `claude login` in
+ # the environment the worker runs in) - Agent SDK usage draws from subscription rate
+ # limits, not a separate credit.
+ ANTHROPIC_API_KEY=
+-# Optional: model used for task extraction. Defaults to claude-haiku-4-5-20251001 (this
+-# call is simple, high-volume extraction, not worth a larger model by default).
++# Optional: model used for task extraction. Defaults to claude-sonnet-5.
+ ANTHROPIC_MODEL=
+ 
+ # Nextcloud (same host as the worker, direct data-dir write)
+ NEXTCLOUD_DATA_DIR=/var/www/nextcloud/data
+ NEXTCLOUD_TARGET_USER=
+ NEXTCLOUD_OCC_BIN=/var/www/nextcloud/occ
++
++# Student metadata (used in the solved-PDF frontmatter)
++STUDENT_NAME=
++STUDENT_KLASSE=
++
++# PDF extraction toolchain (installed system-wide/venv in the Docker image - see docker/Dockerfile)
++PDFTOTEXT_BIN=pdftotext
++PDFTOPPM_BIN=pdftoppm
++PDFINFO_BIN=pdfinfo
++OCRMYPDF_BIN=ocrmypdf
++OCR_LANGUAGES=deu+eng
++MARKITDOWN_BIN=/app/.venv/bin/markitdown
++
++# Solution-PDF generation (pandoc + weasyprint)
++PANDOC_BIN=pandoc
++PANDOC_TEMPLATE_PATH=/app/vorlage/template.html
++PANDOC_CSS_PATH=/app/vorlage/style.css
++WEASYPRINT_BIN=/app/.venv/bin/weasyprint
+diff --git a/README.md b/README.md
+index 8dbd06f..e631fb5 100644
+--- a/README.md
++++ b/README.md
+@@ -1,87 +1,93 @@
+ # teams-task-agent
+ 
+-Watches a local folder for manually-downloaded files (e.g. a zip export of a Teams channel's
+-files, or individual PDFs/docs), uses the Claude Agent SDK to find open tasks/action items and
+-draft solutions, and writes the result into a Nextcloud instance running on the same host.
+-
+-This exists as an alternative to a Microsoft Graph webhook integration for setups where an
+-Azure AD app registration isn't available (no tenant admin rights, or admin consent for
+-`Files.Read.All`/`Sites.Read.All` denied) - files are exported/downloaded by hand from
+-Teams/SharePoint instead of pulled automatically via the Graph API.
++Watches a local `__INBOX__` folder for manually-downloaded files (e.g. a zip export of a
++Teams channel's files, or individual PDFs/docs — including scans and handwritten
++worksheets), uses the Claude Agent SDK to solve open tasks, and files a styled solution PDF
++into a per-subject Nextcloud folder tree. Automates a previously-manual workflow: read a
++dropped school PDF, solve it, file it under the right subject.
+ 
+ ```
+ You, manually: download/export files from Teams (zip, PDF, ...)
+         │
+         ▼
+-Drop into the watched folder (e.g. a Nextcloud-synced directory)
++Drop into __INBOX__ (e.g. a Nextcloud-synced directory)
+         │
+         ▼
+ Ingest watcher ── extracts zips (one job per contained file), enqueues each file
+         │
+         ▼
+ Redis queue (BullMQ)
+         │
+         ▼
+ Worker
+-        ├─ 1. Read the file from disk
+-        ├─ 2. Claude Agent SDK: find open tasks & draft solutions
+-        ├─ 3. Write result into Nextcloud's data dir + `occ files:scan`
+-        └─ 4. Archive the source file into `.processed/` (or `.failed/` on error)
++        ├─ 1. Extract text per-page: MarkItDown (text-layer) / ocrmypdf+Tesseract (scans) /
++        │      Claude vision (handwriting or still-garbled OCR)
++        ├─ 2. Claude Agent SDK: classify subject, solve every task with citations
++        ├─ 3. Render a styled solution PDF (pandoc + weasyprint) — or, for a pure
++        │      Materialblatt (no tasks), skip straight to filing the source
++        ├─ 4. Write into Nextcloud: Fächer/<Fach>/[<Lernfeld>/]<name>_Loesung_<date>.pdf
++        │      + `occ files:scan`
++        └─ 5. Archive the source (OCR'd searchable version if OCR ran) into `.processed/`
++             (or `.failed/` on error)
+ ```
+ 
+ ## Layout
+ 
+ - `src/ingest/` — watches a local folder (chokidar) for dropped files; extracts zip archives
+   and enqueues one job per contained file, or enqueues a single job for any other file directly.
+ - `src/queue/` — BullMQ queue/connection shared by the ingest watcher and worker.
+-- `src/claude/` — Claude Agent SDK integration that finds open tasks in a file and proposes
+-  solutions. The exact "what counts as a task" / output-shape logic is a placeholder default —
+-  see comments in `processFile.ts`; intended to be revisited.
+-- `src/nextcloud/` — writes the result directly into Nextcloud's data directory (no network hop,
+-  same host) and triggers `occ files:scan`.
++- `src/extract/` — per-page tiered text extraction: MarkItDown for text-layer PDFs,
++  `ocrmypdf`/Tesseract for scans, rendered page images for Claude's vision fallback on
++  handwriting or still-garbled OCR output.
++- `src/claude/` — Claude Agent SDK integration that classifies the subject (Fach) and
++  Info-/Materialblatt vs. Aufgabenblatt, and solves every task found with citations.
++- `src/pdf/` — builds the solution Markdown and renders it to a styled PDF via
++  `pandoc`+`weasyprint`.
++- `src/nextcloud/` — writes the result into Nextcloud's data directory under
++  `Fächer/<Fach>/[<Lernfeld>/]`, and triggers `occ files:scan`.
+ - `src/worker/` — wires the above together: read from disk → process → write → archive, one
+   BullMQ `Worker` consuming the queue.
+ - `docker/`, `docker-compose.yml` — containerized ingest watcher + worker + Redis, with bind
+   mounts for the watched folder and Nextcloud's data directory.
+ 
+ ## Setup
+ 
+ ```bash
+ npm install
+-cp .env.example .env   # fill in INGEST_WATCH_DIR + Nextcloud values
++cp .env.example .env   # fill in STUDENT_NAME, STUDENT_KLASSE, INGEST_WATCH_DIR + Nextcloud values
+ npm run dev:ingest     # local folder watcher
+ npm run dev:worker     # local worker
+ ```
+ 
+-Point `INGEST_WATCH_DIR` at whichever folder you'll drop downloaded files into. A convenient
+-option is a folder synced by the Nextcloud desktop/mobile client (or uploaded via Nextcloud's
+-web UI) — that way "upload a file to Nextcloud" is the entire manual step, with no separate
+-transfer to the machine running this app.
++`STUDENT_NAME` and `STUDENT_KLASSE` are required and used to personalize solution output.
++
++`INGEST_WATCH_DIR` defaults to `__INBOX__` in the root of the project directory, but can be
++pointed at any folder you'll drop downloaded files into. A convenient option is a folder synced
++by the Nextcloud desktop/mobile client (or uploaded via Nextcloud's web UI) — that way "upload
++a file to Nextcloud" is the entire manual step, with no separate transfer to the machine running
++this app.
+ 
+ To get files in: from Teams/SharePoint, use "Download" on individual files, or "Download as
+ zip" on a folder of files, then drop the result into the watched folder. Zip archives are
+ extracted automatically and every file inside is processed individually; everything else
+ (PDF, .txt, .md, ...) is processed as-is.
+ 
+ `ANTHROPIC_API_KEY` is optional: the Claude Agent SDK subprocess can instead authenticate via a
+ Claude Pro/Max subscription login (`claude login` in the worker's environment), which draws
+ from subscription rate limits rather than separate API credits. `ANTHROPIC_MODEL` is also
+-optional (defaults to Haiku, since task extraction is a simple, high-volume call).
++optional (defaults to claude-sonnet-5, since homework-solving requires more reasoning than simple task extraction).
+ 
+ ## Commands
+ 
+ - `npm run typecheck` / `npm run lint` / `npm test` — must all pass before opening a PR (see `CLAUDE.md`).
+ - `npm run build` — compiles to `dist/`.
+ 
+ ## Known open items
+ 
+-- Claude processing only handles plain-text formats (`.txt`, `.md`) today — PDFs and other
+-  binary formats are read from disk but rejected before being sent to Claude (see the TODO in
+-  `src/claude/processFile.ts`). Since the point of this workflow is manually-downloaded files,
+-  which are very often PDFs, adding text extraction for PDF (and possibly `.docx`) is the most
+-  impactful next step.
+-- Claude processing prompt/output schema for "open tasks" is a first-pass default (see
+-  `src/claude/processFile.ts`), not a finalized product decision.
++- `.docx` extraction is not wired up yet (MarkItDown supports it; the extraction module
++  already routes by file extension, so this is a small follow-up).
++- The OCR-quality gate (`isQualityText` in `src/extract/pdfText.ts`) uses a simple
++  alphanumeric-ratio heuristic; a stronger check (e.g. dictionary-based) is a reasonable
++  follow-up if it proves too permissive/strict in practice.
+ - The ingest watcher watches only the top level of `INGEST_WATCH_DIR` (no subfolders) and
+-  assumes a local/POSIX filesystem; folders synced over network filesystems or with unusual
+-  change-notification behavior may need `usePolling` added to the chokidar config.
++  assumes a local/POSIX filesystem.
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+index ab02808..6b67111 100644
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -1,49 +1,56 @@
+ # Multi-stage Dockerfile for teams-task-agent ingest and worker services
+ # Both services use the same image with different entrypoint commands (supplied via docker-compose)
++#
++# Debian slim (not Alpine) - ocrmypdf/markitdown/weasyprint's native dependencies (Ghostscript,
++# qpdf, Cairo/Pango) are far more reliably available via apt than via Alpine's musl-libc/apk.
+ 
+ # === Build stage ===
+-FROM node:20-alpine AS builder
++FROM node:20-slim AS builder
+ 
+ WORKDIR /app
+ 
+-# Copy package files
+ COPY package.json package-lock.json* ./
+-
+-# Install dependencies (all, including dev)
+-# NOTE: Once package-lock.json is committed to the repo, switch to `npm ci` instead of `npm install`
+-#       for reproducible, locked builds in Docker
+ RUN npm install
+ 
+-# Copy source code
+ COPY tsconfig.json ./
+ COPY src ./src
+ 
+-# Compile TypeScript to JavaScript
+ RUN npm run build
+ 
+ # === Runtime stage ===
+-FROM node:20-alpine
++FROM node:20-slim
+ 
+ WORKDIR /app
+ 
+-# Create non-root user to run the application
+-RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
++RUN apt-get update && apt-get install -y --no-install-recommends \
++    poppler-utils \
++    ocrmypdf \
++    tesseract-ocr \
++    tesseract-ocr-deu \
++    tesseract-ocr-eng \
++    pandoc \
++    fonts-liberation \
++    python3 \
++    python3-venv \
++    python3-pip \
++    && rm -rf /var/lib/apt/lists/*
++
++# Dedicated venv for markitdown + weasyprint - same workaround as the old schule-loesen skill
++# used for weasyprint (Debian's "externally-managed-environment" blocks a bare `pip install`).
++RUN python3 -m venv /app/.venv \
++    && /app/.venv/bin/pip install --quiet --no-cache-dir --upgrade pip \
++    && /app/.venv/bin/pip install --quiet --no-cache-dir markitdown weasyprint
++
++RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -s /bin/false nodejs
+ 
+-# Copy package files from builder
+ COPY package.json package-lock.json* ./
+-
+-# Install only production dependencies
+-# NOTE: Once lockfile is committed, switch to `npm ci --omit=dev`
+ RUN npm install --omit=dev
+ 
+-# Copy compiled application from builder
+ COPY --from=builder /app/dist ./dist
++COPY docker/vorlage ./vorlage
+ 
+-# Change ownership to non-root user
+ RUN chown -R nodejs:nodejs /app
+ 
+-# Switch to non-root user
+ USER nodejs
+ 
+ # No CMD or ENTRYPOINT here — the command is supplied via docker-compose's `command:` field
+-# This allows both ingest (npm run start:ingest) and worker (npm run start:worker) to use the same image
+diff --git a/docker/vorlage/style.css b/docker/vorlage/style.css
+new file mode 100644
+index 0000000..3f2b961
+--- /dev/null
++++ b/docker/vorlage/style.css
+@@ -0,0 +1,95 @@
++/* docker/vorlage/style.css */
++body {
++  font-family: Georgia, 'Tinos', 'Liberation Serif', serif;
++  color: #1a1a1a;
++  margin: 2.5cm 2cm;
++}
++
++.doc-header {
++  text-align: center;
++  border-bottom: 2px solid #1a1a1a;
++  padding-bottom: 12px;
++  margin-bottom: 20px;
++}
++
++.doc-header__fach {
++  font-family: 'Liberation Sans', sans-serif;
++  font-size: 11px;
++  letter-spacing: 1px;
++  text-transform: uppercase;
++  color: #555;
++}
++
++.doc-header__title {
++  font-size: 21px;
++  font-weight: bold;
++  margin-top: 4px;
++}
++
++.doc-header__meta {
++  font-family: 'Liberation Sans', sans-serif;
++  font-size: 11px;
++  color: #777;
++  margin-top: 6px;
++}
++
++.task {
++  border: 1px solid #e3e3e3;
++  border-radius: 6px;
++  padding: 16px 16px 16px 14px;
++  margin-bottom: 14px;
++  page-break-inside: avoid;
++}
++
++.task h2 {
++  font-size: 15px;
++  margin: 0 0 10px 0;
++}
++
++.frage,
++.antwort {
++  border-left: 2px solid;
++  padding-left: 10px;
++  margin-bottom: 12px;
++}
++
++.frage {
++  border-left-color: #8892b0;
++  font-style: italic;
++  color: #333;
++  font-size: 13px;
++}
++
++.antwort {
++  border-left-color: #2f6b45;
++  font-size: 13.5px;
++  line-height: 1.6;
++}
++
++.frage::before,
++.antwort::before {
++  display: block;
++  font-family: 'Liberation Sans', sans-serif;
++  font-size: 9.5px;
++  font-weight: 700;
++  letter-spacing: 1.2px;
++  text-transform: uppercase;
++  margin-bottom: 3px;
++}
++
++.frage::before {
++  content: 'Frage';
++  color: #8892b0;
++}
++
++.antwort::before {
++  content: 'Antwort';
++  color: #2f6b45;
++}
++
++.quelle {
++  font-family: 'Liberation Sans', sans-serif;
++  font-size: 11px;
++  color: #888;
++  padding-left: 10px;
++}
+diff --git a/docker/vorlage/template.html b/docker/vorlage/template.html
+new file mode 100644
+index 0000000..b11cf1f
+--- /dev/null
++++ b/docker/vorlage/template.html
+@@ -0,0 +1,18 @@
++<!-- docker/vorlage/template.html -->
++<!DOCTYPE html>
++<html lang="$lang$">
++<head>
++<meta charset="utf-8">
++<title>$title$</title>
++</head>
++<body>
++<header class="doc-header">
++  <div class="doc-header__fach">$fach$$if(lernfeld)$ · $lernfeld$$endif$</div>
++  <div class="doc-header__title">$thema$</div>
++  <div class="doc-header__meta">$name$ · $klasse$ · $datum$</div>
++</header>
++<main>
++$body$
++</main>
++</body>
++</html>
+diff --git a/package-lock.json b/package-lock.json
+index e1469d5..4b6b5a9 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -7,26 +7,24 @@
+     "": {
+       "name": "teams-task-agent",
+       "version": "0.1.0",
+       "dependencies": {
+         "@anthropic-ai/claude-agent-sdk": "^0.3.216",
+         "adm-zip": "^0.6.0",
+         "bullmq": "^5.12.7",
+         "chokidar": "^5.0.0",
+         "dotenv": "^16.4.5",
+         "ioredis": "^5.4.1",
+-        "mime-types": "^3.0.2",
+         "pino": "^9.3.2"
+       },
+       "devDependencies": {
+         "@types/adm-zip": "^0.5.8",
+-        "@types/mime-types": "^3.0.1",
+         "@types/node": "^20.14.15",
+         "@typescript-eslint/eslint-plugin": "^8.0.1",
+         "@typescript-eslint/parser": "^8.0.1",
+         "eslint": "^9.9.0",
+         "tsx": "^4.17.0",
+         "typescript": "^5.5.4",
+         "vitest": "^2.0.5"
+       },
+       "engines": {
+         "node": ">=20"
+@@ -1786,27 +1784,20 @@
+       "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/@types/json-schema": {
+       "version": "7.0.15",
+       "resolved": "https://registry.npmjs.org/@types/json-schema/-/json-schema-7.0.15.tgz",
+       "integrity": "sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==",
+       "dev": true,
+       "license": "MIT"
+     },
+-    "node_modules/@types/mime-types": {
+-      "version": "3.0.1",
+-      "resolved": "https://registry.npmjs.org/@types/mime-types/-/mime-types-3.0.1.tgz",
+-      "integrity": "sha512-xRMsfuQbnRq1Ef+C+RKaENOxXX87Ygl38W1vDfPHRku02TgQr+Qd8iivLtAMcR0KF5/29xlnFihkTlbqFrGOVQ==",
+-      "dev": true,
+-      "license": "MIT"
+-    },
+     "node_modules/@types/node": {
+       "version": "20.19.43",
+       "resolved": "https://registry.npmjs.org/@types/node/-/node-20.19.43.tgz",
+       "integrity": "sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA==",
+       "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "undici-types": "~6.21.0"
+       }
+     },
+@@ -3930,29 +3921,31 @@
+       },
+       "engines": {
+         "node": ">=4"
+       }
+     },
+     "node_modules/mime-db": {
+       "version": "1.54.0",
+       "resolved": "https://registry.npmjs.org/mime-db/-/mime-db-1.54.0.tgz",
+       "integrity": "sha512-aU5EJuIN2WDemCcAp2vFBfp/m4EAhWJnUNSSw0ixs7/kXbd6Pg64EmwJkNdFhB8aWt1sH2CTXrLxo/iAGV3oPQ==",
+       "license": "MIT",
++      "peer": true,
+       "engines": {
+         "node": ">= 0.6"
+       }
+     },
+     "node_modules/mime-types": {
+       "version": "3.0.2",
+       "resolved": "https://registry.npmjs.org/mime-types/-/mime-types-3.0.2.tgz",
+       "integrity": "sha512-Lbgzdk0h4juoQ9fCKXW4by0UJqj+nOOrI9MJ1sSj4nI8aI2eo1qmvQEie4VD1glsS250n15LsWsYtCugiStS5A==",
+       "license": "MIT",
++      "peer": true,
+       "dependencies": {
+         "mime-db": "^1.54.0"
+       },
+       "engines": {
+         "node": ">=18"
+       },
+       "funding": {
+         "type": "opencollective",
+         "url": "https://opencollective.com/express"
+       }
+diff --git a/package.json b/package.json
+index 82de83e..107c300 100644
+--- a/package.json
++++ b/package.json
+@@ -17,25 +17,23 @@
+     "test": "vitest run",
+     "typecheck": "tsc --noEmit"
+   },
+   "dependencies": {
+     "@anthropic-ai/claude-agent-sdk": "^0.3.216",
+     "adm-zip": "^0.6.0",
+     "bullmq": "^5.12.7",
+     "chokidar": "^5.0.0",
+     "dotenv": "^16.4.5",
+     "ioredis": "^5.4.1",
+-    "mime-types": "^3.0.2",
+     "pino": "^9.3.2"
+   },
+   "devDependencies": {
+     "@types/adm-zip": "^0.5.8",
+-    "@types/mime-types": "^3.0.1",
+     "@types/node": "^20.14.15",
+     "@typescript-eslint/eslint-plugin": "^8.0.1",
+     "@typescript-eslint/parser": "^8.0.1",
+     "eslint": "^9.9.0",
+     "tsx": "^4.17.0",
+     "typescript": "^5.5.4",
+     "vitest": "^2.0.5"
+   }
+ }
+diff --git a/src/claude/processFile.ts b/src/claude/processFile.ts
+index ab05e74..f774859 100644
+--- a/src/claude/processFile.ts
++++ b/src/claude/processFile.ts
+@@ -1,268 +1,223 @@
+-import { extname } from 'node:path';
+-import { query as sdkQuery, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
++import { readFile as fsReadFile } from 'node:fs/promises';
++import { query as sdkQuery, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+ import pino from 'pino';
+ import { config } from '../config/index.js';
+-import type { DownloadedFile, FileProcessor, ProcessedFileResult, TaskSolution } from '../types.js';
++import { FACH_KEYS, type FachKey } from '../fach.js';
++import type { ExtractionResult, FileProcessor, ProcessedFileResult, TaskSolution, VisionPage } from '../types.js';
+ 
+ const logger = pino({ name: 'claude-file-processor' });
+ 
+ /**
+  * The Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) is Claude Code packaged as a
+  * library — `query()` returns an async generator of `SDKMessage` events and drives the
+- * full Claude Code harness (built-in tools, permissions, subprocess management, etc.).
+- * It is NOT the plain Messages API. Since we only want a single-shot "read this text,
+- * return structured JSON" call with no filesystem/bash access, we disable all built-in
+- * tools (`tools: []`) and rely on the SDK's native structured-output support
+- * (`outputFormat: { type: 'json_schema', ... }`), which the SDK validates and retries
+- * internally and returns as `structured_output` on the final `result` message.
++ * full Claude Code harness. We disable all built-in tools (`tools: []`) and rely on the
++ * SDK's native structured-output support (`outputFormat: { type: 'json_schema', ... }`).
++ * When the extraction stage produced page images for the vision fallback, `prompt` is an
++ * async-iterable of `SDKUserMessage` carrying image content blocks instead of a plain
++ * string, per the SDK's streaming input mode.
+  */
+ 
+-// Only a function type (not the full `Query` interface, which also exposes ~20 control
+-// methods like interrupt()/setModel()/mcpServerStatus()) is needed here — this keeps the
+-// SDK call trivially mockable/injectable for tests without having to stub the entire
+-// Query control surface.
+-type QueryFn = (params: { prompt: string; options?: Options }) => AsyncIterable<SDKMessage>;
++type QueryFn = (params: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }) => AsyncIterable<SDKMessage>;
++type ReadImageFileFn = (path: string) => Promise<Buffer>;
+ 
+-/**
+- * Formats currently handled: plain text (.txt) and Markdown (.md) — decoded as UTF-8 and
+- * embedded directly into the prompt.
+- *
+- * TODO: .docx / .pdf and other binary formats are NOT handled yet. The Claude Agent SDK
+- * does not accept raw file bytes as first-class message content (unlike the Messages API's
+- * `document` content block) — it expects the caller to give it filesystem access via
+- * `cwd`/tools and let the model use the Read tool, or to pre-extract text itself. Either
+- * approach is a reasonable follow-up; for this first pass we only decode-and-embed text.
+- */
+-const SUPPORTED_TEXT_EXTENSIONS = new Set(['.txt', '.md']);
+-const SUPPORTED_TEXT_MIME_TYPES = new Set(['text/plain', 'text/markdown']);
++const SYSTEM_PROMPT = `Du bist ein Assistent, der Schulunterlagen liest, Aufgaben löst und Materialblätter erkennt.
+ 
+-function isPlainTextFile(file: DownloadedFile): boolean {
+-  const ext = extname(file.fileName).toLowerCase();
+-  return SUPPORTED_TEXT_EXTENSIONS.has(ext) || SUPPORTED_TEXT_MIME_TYPES.has(file.mimeType.toLowerCase());
+-}
++Klassifiziere zuerst, ob das Dokument ein Aufgabenblatt (enthält zu lösende Aufgaben) oder ein
++reines Info-/Materialblatt (Fakten, Gesetzestexte, Merkblatt - keine Aufgaben) ist.
+ 
+-/**
+- * ============================================================================
+- * OPEN PRODUCT DECISION (see architecture doc): exactly what counts as an "open
+- * task" and what shape the proposed solution should take is NOT finalized. The
+- * prompt and JSON schema below are a REASONABLE DEFAULT for this first working
+- * integration, defining "open task" broadly as: TODOs, unchecked checklist items,
+- * questions left open in the text, decisions explicitly marked pending, and similar
+- * unresolved action items. This default can be swapped out (different prompt,
+- * different output shape, even a different parsing strategy) without touching
+- * anything else in the pipeline — that is the entire point of routing everything
+- * through the `FileProcessor` interface in src/types.ts.
+- * ============================================================================
+- */
+-const TASK_EXTRACTION_SYSTEM_PROMPT = `You are an assistant that reviews a document and finds open, unresolved tasks or action items.
++Bestimme das Fach über den festen Fach-Schlüssel (siehe Enum im Schema). Bilde lose oder
++synonyme Bezeichnungen aggressiv auf den passenden festen Schlüssel ab (z.B. "Mathe" oder
++"Informationstechnik" auf den nächstliegenden Eintrag), statt eine Abweichung als
++unklassifizierbar zu behandeln. Wenn wirklich kein Schlüssel passt, verwende "_Unsortiert".
+ 
+-An "open task" includes things like:
+-- Explicit TODOs or FIXMEs
+-- Unchecked checklist items (e.g. "- [ ] ...")
+-- Questions left open or unanswered in the text
+-- Decisions explicitly marked as pending, TBD, or "needs discussion"
+-- Action items assigned to someone but not marked complete
++Falls Seitenbilder mitgeliefert werden (Vision-Fallback für schlecht lesbare/handschriftliche
++Seiten), sind diese Bilder für die jeweilige Seite maßgeblich - ignoriere dafür etwaigen
++verstümmelten Text aus dem Markdown für dieselbe Seite.
+ 
+-For each open task you find, draft a concrete, actionable proposed solution or next step —
+-not a vague restatement of the task. Be specific enough that someone could act on it directly.
++Löse jede Aufgabe vollständig und präzise, ohne Füllsätze. Nenne Paragraphen, Kategorien oder
++Quellen im "quelle"-Feld, wo zutreffend. Wenn das Dokument keine Aufgaben enthält (Materialblatt),
++gib ein leeres "tasksFound"-Array zurück.
+ 
+-Respond only with the structured JSON described by the provided schema. Do not include any
+-commentary outside of that JSON. If the document contains no open tasks, return an empty
+-"tasksFound" array and use "summaryMarkdown" to briefly note that no open tasks were found.`;
++Antworte ausschließlich mit dem im Schema beschriebenen JSON.`;
+ 
+ const RESULT_JSON_SCHEMA = {
+   type: 'object',
+   properties: {
++    isMaterialblatt: { type: 'boolean', description: 'true wenn das Dokument keine zu lösenden Aufgaben enthält.' },
++    fach: { type: 'string', enum: [...FACH_KEYS], description: 'Fester Fach-Schlüssel.' },
++    lernfeld: { type: 'string', description: 'Optionales Kapitel/Lernfeld, falls im Dokument erkennbar.' },
++    thema: { type: 'string', description: 'Kurzes Thema des Dokuments.' },
+     tasksFound: {
+       type: 'array',
+-      description: 'Every open/unresolved task found in the document, each with a proposed solution.',
++      description: 'Jede gefundene Aufgabe mit vollständiger Lösung. Leer bei einem Materialblatt.',
+       items: {
+         type: 'object',
+         properties: {
+-          taskDescription: {
+-            type: 'string',
+-            description: 'A concise description of the open task as found in the document.',
+-          },
+-          proposedSolution: {
+-            type: 'string',
+-            description: 'A concrete, actionable proposed solution or next step for this task.',
+-          },
++          title: { type: 'string', description: 'Kurztitel für die Überschrift.' },
++          taskDescription: { type: 'string', description: 'Vollständiger Aufgabentext.' },
++          proposedSolution: { type: 'string', description: 'Vollständige, konkrete Lösung.' },
++          quelle: { type: 'string', description: 'Paragraphen/Quellen/Kategorie, falls zutreffend.' },
+         },
+-        required: ['taskDescription', 'proposedSolution'],
++        required: ['title', 'taskDescription', 'proposedSolution'],
+         additionalProperties: false,
+       },
+     },
+-    summaryMarkdown: {
+-      type: 'string',
+-      description: 'A short Markdown summary of the document and the open tasks found (or their absence).',
+-    },
+   },
+-  required: ['tasksFound', 'summaryMarkdown'],
++  required: ['isMaterialblatt', 'fach', 'thema', 'tasksFound'],
+   additionalProperties: false,
+ } as const;
+ 
+-function buildPrompt(file: DownloadedFile, text: string): string {
+-  return `Here is the content of the file "${file.fileName}":
++function buildPromptText(fileName: string, extraction: ExtractionResult): string {
++  const visionNote =
++    extraction.visionPages.length > 0
++      ? `\n\nHinweis: Für die Seite(n) ${extraction.visionPages.map((p) => p.pageNumber).join(', ')} sind Bilder beigefügt - nutze diese als Quelle, nicht den Markdown-Text für diese Seiten.`
++      : '';
++  return `Hier ist der extrahierte Inhalt der Datei "${fileName}":
+ 
+ <file_content>
+-${text}
+-</file_content>
++${extraction.markdown}
++</file_content>${visionNote}
+ 
+-Analyze the file content above and respond with the structured JSON described in your instructions.`;
++Analysiere den Inhalt und antworte mit dem im Schema beschriebenen JSON.`;
+ }
+ 
+-interface ParsedTaskExtractionResult {
+-  tasksFound: TaskSolution[];
+-  summaryMarkdown: string;
++async function* buildVisionPrompt(
++  promptText: string,
++  visionPages: VisionPage[],
++  readImageFile: ReadImageFileFn,
++): AsyncGenerator<SDKUserMessage> {
++  const imageBlocks = await Promise.all(
++    visionPages.map(async (page) => ({
++      type: 'image' as const,
++      source: { type: 'base64' as const, media_type: 'image/png' as const, data: (await readImageFile(page.imagePath)).toString('base64') },
++    })),
++  );
++  yield {
++    type: 'user',
++    parent_tool_use_id: null,
++    message: {
++      role: 'user',
++      content: [{ type: 'text' as const, text: promptText }, ...imageBlocks],
++    },
++  };
+ }
+ 
+ function parseModelJson(rawText: string, fileName: string): unknown {
+   try {
+     return JSON.parse(rawText);
+   } catch (cause) {
+     throw new Error(
+       `claude/processFile: Claude's response for "${fileName}" was not valid JSON: ${
+         cause instanceof Error ? cause.message : String(cause)
+       }. Raw response (truncated): ${rawText.slice(0, 500)}`,
+     );
+   }
+ }
+ 
+-function validateTaskExtractionShape(raw: unknown, fileName: string): ParsedTaskExtractionResult {
++function validateShape(raw: unknown, fileName: string): ProcessedFileResult {
+   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+     throw new Error(`claude/processFile: Claude's response for "${fileName}" was not a JSON object.`);
+   }
+-
+   const obj = raw as Record<string, unknown>;
+ 
++  if (typeof obj.isMaterialblatt !== 'boolean') {
++    throw new Error(`claude/processFile: Claude's response for "${fileName}" is missing "isMaterialblatt".`);
++  }
++  if (typeof obj.fach !== 'string' || !(FACH_KEYS as readonly string[]).includes(obj.fach)) {
++    throw new Error(`claude/processFile: Claude's response for "${fileName}" has an invalid "fach".`);
++  }
++  if (typeof obj.thema !== 'string') {
++    throw new Error(`claude/processFile: Claude's response for "${fileName}" is missing "thema".`);
++  }
+   if (!Array.isArray(obj.tasksFound)) {
+     throw new Error(`claude/processFile: Claude's response for "${fileName}" is missing a "tasksFound" array.`);
+   }
+ 
+-  if (typeof obj.summaryMarkdown !== 'string') {
+-    throw new Error(`claude/processFile: Claude's response for "${fileName}" is missing a "summaryMarkdown" string.`);
+-  }
+-
+   const tasksFound: TaskSolution[] = obj.tasksFound.map((task, index) => {
+     if (typeof task !== 'object' || task === null || Array.isArray(task)) {
+-      throw new Error(
+-        `claude/processFile: task at index ${index} in Claude's response for "${fileName}" is not an object.`,
+-      );
++      throw new Error(`claude/processFile: task at index ${index} for "${fileName}" is not an object.`);
+     }
+-    const taskObj = task as Record<string, unknown>;
+-    if (typeof taskObj.taskDescription !== 'string' || typeof taskObj.proposedSolution !== 'string') {
+-      throw new Error(
+-        `claude/processFile: task at index ${index} in Claude's response for "${fileName}" is missing ` +
+-          `"taskDescription" or "proposedSolution" (or they are not strings).`,
+-      );
++    const t = task as Record<string, unknown>;
++    if (typeof t.title !== 'string' || typeof t.taskDescription !== 'string' || typeof t.proposedSolution !== 'string') {
++      throw new Error(`claude/processFile: task at index ${index} for "${fileName}" is missing required fields.`);
+     }
+     return {
+-      taskDescription: taskObj.taskDescription,
+-      proposedSolution: taskObj.proposedSolution,
++      title: t.title,
++      taskDescription: t.taskDescription,
++      proposedSolution: t.proposedSolution,
++      ...(typeof t.quelle === 'string' ? { quelle: t.quelle } : {}),
+     };
+   });
+ 
+-  return { tasksFound, summaryMarkdown: obj.summaryMarkdown };
++  return {
++    originalFileName: fileName,
++    isMaterialblatt: obj.isMaterialblatt,
++    fach: obj.fach as FachKey,
++    ...(typeof obj.lernfeld === 'string' ? { lernfeld: obj.lernfeld } : {}),
++    thema: obj.thema,
++    tasksFound,
++  };
+ }
+ 
+ export interface CreateFileProcessorOptions {
+-  /**
+-   * Injectable SDK query function — defaults to the real `query()` export from
+-   * `@anthropic-ai/claude-agent-sdk`. Tests pass a stub/mock here instead of hitting
+-   * the network.
+-   */
+   queryFn?: QueryFn;
++  readImageFile?: ReadImageFileFn;
+ }
+ 
+-/**
+- * Creates a {@link FileProcessor} backed by the Claude Agent SDK.
+- *
+- * See the module-level comment for the SDK usage rationale, and the comment above
+- * `TASK_EXTRACTION_SYSTEM_PROMPT` for what "open task" means here (an open, swappable
+- * product decision).
+- */
+ export function createFileProcessor(options: CreateFileProcessorOptions = {}): FileProcessor {
+   const queryFn: QueryFn = options.queryFn ?? sdkQuery;
++  const readImageFile: ReadImageFileFn = options.readImageFile ?? ((path: string) => fsReadFile(path));
+ 
+   return {
+-    async processFile(file: DownloadedFile): Promise<ProcessedFileResult> {
+-      // No fail-fast check on ANTHROPIC_API_KEY here: it's optional. The Claude Agent SDK
+-      // spawns a subprocess that resolves its own auth (inherited ANTHROPIC_API_KEY, or a
+-      // Claude Pro/Max subscription login via `claude login` — see config.anthropic.apiKey
+-      // for details) and reports which one it used via `resultMessage.apiKeySource` below.
++    async processFile(fileName: string, extraction: ExtractionResult): Promise<ProcessedFileResult> {
+       if (!config.anthropic.apiKey()) {
+         logger.info('ANTHROPIC_API_KEY not set; relying on Claude Code subscription login (`claude login`)');
+       }
+ 
+-      if (!isPlainTextFile(file)) {
+-        throw new Error(
+-          `claude/processFile: unsupported file type for "${file.fileName}" (mimeType: "${file.mimeType}"). ` +
+-            'Only plain-text formats (.txt, .md) are currently supported; binary formats like ' +
+-            '.docx/.pdf are not yet implemented (see TODO in src/claude/processFile.ts).',
+-        );
+-      }
++      const promptText = buildPromptText(fileName, extraction);
++      const prompt: string | AsyncIterable<SDKUserMessage> =
++        extraction.visionPages.length > 0 ? buildVisionPrompt(promptText, extraction.visionPages, readImageFile) : promptText;
+ 
+-      const text = file.content.toString('utf-8');
+-      const prompt = buildPrompt(file, text);
+-
+-      logger.info({ fileName: file.fileName, mimeType: file.mimeType }, 'Sending file to Claude for task extraction');
++      logger.info({ fileName, visionPages: extraction.visionPages.length }, 'Sending file to Claude for solving');
+ 
+       let resultMessage: Extract<SDKMessage, { type: 'result' }> | undefined;
+ 
+       for await (const message of queryFn({
+         prompt,
+         options: {
+-          systemPrompt: TASK_EXTRACTION_SYSTEM_PROMPT,
+-          // Configurable via ANTHROPIC_MODEL (defaults to Haiku — this task is a simple,
+-          // high-volume extraction call, not worth a larger model by default).
++          systemPrompt: SYSTEM_PROMPT,
+           model: config.anthropic.model,
+-          // No filesystem/bash/etc. access needed — we embed the file text directly in
+-          // the prompt and only want a structured JSON response back.
+           tools: [],
+           maxTurns: 3,
+           outputFormat: { type: 'json_schema', schema: RESULT_JSON_SCHEMA },
+         },
+       })) {
+         if (message.type === 'system' && message.subtype === 'init') {
+-          logger.info({ fileName: file.fileName, apiKeySource: message.apiKeySource }, 'Claude Agent SDK session started');
++          logger.info({ fileName, apiKeySource: message.apiKeySource }, 'Claude Agent SDK session started');
+         }
+         if (message.type === 'result') {
+           resultMessage = message;
+         }
+       }
+ 
+       if (!resultMessage) {
+-        logger.error({ fileName: file.fileName }, 'Claude Agent SDK query produced no result message');
+-        throw new Error(`claude/processFile: received no result from Claude for "${file.fileName}".`);
++        logger.error({ fileName }, 'Claude Agent SDK query produced no result message');
++        throw new Error(`claude/processFile: received no result from Claude for "${fileName}".`);
+       }
+ 
+       if (resultMessage.subtype !== 'success') {
+-        logger.error(
+-          { fileName: file.fileName, subtype: resultMessage.subtype, errors: resultMessage.errors },
+-          'Claude Agent SDK query did not succeed',
+-        );
++        logger.error({ fileName, subtype: resultMessage.subtype, errors: resultMessage.errors }, 'Claude Agent SDK query did not succeed');
+         throw new Error(
+-          `claude/processFile: Claude query failed for "${file.fileName}" (${resultMessage.subtype}): ` +
+-            `${resultMessage.errors?.join('; ') ?? 'unknown error'}`,
++          `claude/processFile: Claude query failed for "${fileName}" (${resultMessage.subtype}): ${resultMessage.errors?.join('; ') ?? 'unknown error'}`,
+         );
+       }
+ 
+-      // Prefer the SDK's validated structured_output (populated because we set
+-      // `outputFormat`); fall back to parsing the plain-text `result` field in case a
+-      // caller/mocked SDK build doesn't populate structured_output.
+-      const raw = resultMessage.structured_output ?? parseModelJson(resultMessage.result, file.fileName);
+-      const parsed = validateTaskExtractionShape(raw, file.fileName);
++      const raw = resultMessage.structured_output ?? parseModelJson(resultMessage.result, fileName);
++      const result = validateShape(raw, fileName);
+ 
+-      logger.info(
+-        { fileName: file.fileName, tasksFound: parsed.tasksFound.length },
+-        'Claude task extraction complete',
+-      );
++      logger.info({ fileName, isMaterialblatt: result.isMaterialblatt, tasksFound: result.tasksFound.length }, 'Claude solve complete');
+ 
+-      return {
+-        originalFileName: file.fileName,
+-        tasksFound: parsed.tasksFound,
+-        summaryMarkdown: parsed.summaryMarkdown,
+-      };
++      return result;
+     },
+   };
+ }
+diff --git a/src/config/index.ts b/src/config/index.ts
+index ba2c08f..76bc432 100644
+--- a/src/config/index.ts
++++ b/src/config/index.ts
+@@ -2,46 +2,73 @@ import 'dotenv/config';
+ 
+ function required(name: string): string {
+   const value = process.env[name];
+   if (!value) {
+     throw new Error(`Missing required environment variable: ${name}`);
+   }
+   return value;
+ }
+ 
+ function optional(name: string, fallback: string): string {
+-  return process.env[name] ?? fallback;
++  // Treat an empty-string env var the same as an unset one (consistent with `required()`'s
++  // `if (!value)` check below). Checked-in .env templates commonly leave optional keys
++  // present but blank (e.g. `ANTHROPIC_MODEL=`) - `??` alone would take that literal '' as
++  // the value and silently defeat the documented default.
++  const value = process.env[name];
++  return value ? value : fallback;
+ }
+ 
+ export const config = {
+   redis: {
+     url: optional('REDIS_URL', 'redis://localhost:6379'),
+   },
+   ingest: {
+     // Folder watched for manually-downloaded files (zips, PDFs, docs, etc.) - e.g. a
+     // Nextcloud-synced directory the user drops exported Teams files into by hand.
+-    watchDir: optional('INGEST_WATCH_DIR', './inbox'),
++    watchDir: optional('INGEST_WATCH_DIR', '__INBOX__'),
+     // Subfolders of watchDir that ingested files are moved into after processing, so the
+     // watcher never re-enqueues its own output. Kept inside watchDir so a single bind mount
+     // covers everything.
+     processedDirName: optional('INGEST_PROCESSED_DIRNAME', '.processed'),
+     failedDirName: optional('INGEST_FAILED_DIRNAME', '.failed'),
+     // Scratch subfolder zip contents are extracted into before being enqueued file-by-file.
+     stagingDirName: optional('INGEST_STAGING_DIRNAME', '.staging'),
+     // How long a file must sit unmodified before it's considered fully written (avoids
+     // enqueuing a partially-copied/uploaded file). Passed to chokidar's awaitWriteFinish.
+     stabilityThresholdMs: Number(optional('INGEST_STABILITY_THRESHOLD_MS', '2000')),
+   },
+   anthropic: {
+     // No fallback default: leaving ANTHROPIC_API_KEY unset is valid and expected when the
+     // Claude Agent SDK subprocess is authenticated via a Claude Pro/Max subscription login
+     // (`claude login`) instead of API billing. The SDK subprocess inherits process.env and
+     // resolves its own auth source; we don't require a key here.
+     apiKey: (): string | undefined => process.env.ANTHROPIC_API_KEY,
+-    model: optional('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001'),
++    model: optional('ANTHROPIC_MODEL', 'claude-sonnet-5'),
+   },
+   nextcloud: {
+     dataDir: () => required('NEXTCLOUD_DATA_DIR'),
+     targetUser: () => required('NEXTCLOUD_TARGET_USER'),
+     occBinary: optional('NEXTCLOUD_OCC_BIN', '/var/www/nextcloud/occ'),
+   },
++  student: {
++    name: (): string => required('STUDENT_NAME'),
++    klasse: (): string => required('STUDENT_KLASSE'),
++  },
++  poppler: {
++    pdftotextBin: optional('PDFTOTEXT_BIN', 'pdftotext'),
++    pdftoppmBin: optional('PDFTOPPM_BIN', 'pdftoppm'),
++    pdfinfoBin: optional('PDFINFO_BIN', 'pdfinfo'),
++  },
++  ocr: {
++    binary: optional('OCRMYPDF_BIN', 'ocrmypdf'),
++    languages: optional('OCR_LANGUAGES', 'deu+eng'),
++  },
++  markitdown: {
++    binary: optional('MARKITDOWN_BIN', '/app/.venv/bin/markitdown'),
++  },
++  pandoc: {
++    binary: optional('PANDOC_BIN', 'pandoc'),
++    templatePath: optional('PANDOC_TEMPLATE_PATH', '/app/vorlage/template.html'),
++    cssPath: optional('PANDOC_CSS_PATH', '/app/vorlage/style.css'),
++    weasyprintBinary: optional('WEASYPRINT_BIN', '/app/.venv/bin/weasyprint'),
++  },
+ };
+diff --git a/src/extract/index.ts b/src/extract/index.ts
+new file mode 100644
+index 0000000..cd72844
+--- /dev/null
++++ b/src/extract/index.ts
+@@ -0,0 +1,77 @@
++import { extname } from 'node:path';
++import * as path from 'node:path';
++import { promises as fs } from 'node:fs';
++import { getPageText, getPdfPageCount, isQualityText } from './pdfText.js';
++import { ocrPdf } from './ocr.js';
++import { convertToMarkdown } from './markitdown.js';
++import { renderPageToPng } from './renderPage.js';
++import type { ExtractionResult, VisionPage } from '../types.js';
++
++export interface ExtractDeps {
++  getPdfPageCount?: typeof getPdfPageCount;
++  getPageText?: typeof getPageText;
++  isQualityText?: typeof isQualityText;
++  ocrPdf?: typeof ocrPdf;
++  convertToMarkdown?: typeof convertToMarkdown;
++  renderPageToPng?: typeof renderPageToPng;
++}
++
++const TEXT_EXTENSIONS = new Set(['.txt', '.md']);
++
++export async function extractFile(
++  filePath: string,
++  workDir: string,
++  deps: ExtractDeps = {},
++): Promise<ExtractionResult> {
++  const getPageCount = deps.getPdfPageCount ?? getPdfPageCount;
++  const getText = deps.getPageText ?? getPageText;
++  const checkQuality = deps.isQualityText ?? isQualityText;
++  const runOcr = deps.ocrPdf ?? ocrPdf;
++  const toMarkdown = deps.convertToMarkdown ?? convertToMarkdown;
++  const renderPage = deps.renderPageToPng ?? renderPageToPng;
++
++  const ext = extname(filePath).toLowerCase();
++
++  if (TEXT_EXTENSIONS.has(ext)) {
++    const markdown = await fs.readFile(filePath, 'utf-8');
++    return { markdown, visionPages: [], ranOcr: false, archivalPdfPath: filePath };
++  }
++
++  if (ext !== '.pdf') {
++    throw new Error(`extract: unsupported file type "${ext}" for "${filePath}"`);
++  }
++
++  const pageCount = await getPageCount(filePath);
++  const pageNumbers = Array.from({ length: pageCount }, (_, i) => i + 1);
++
++  const originalTexts = await Promise.all(pageNumbers.map((page) => getText(filePath, page)));
++  const needsOcr = originalTexts.some((text) => !checkQuality(text));
++
++  let workingPdfPath = filePath;
++  let ranOcr = false;
++  let pageTexts = originalTexts;
++
++  if (needsOcr) {
++    const ocrOutputPath = path.join(workDir, 'ocr.pdf');
++    await runOcr(filePath, ocrOutputPath);
++    workingPdfPath = ocrOutputPath;
++    ranOcr = true;
++    pageTexts = await Promise.all(pageNumbers.map((page) => getText(ocrOutputPath, page)));
++  }
++
++  const visionPageNumbers = pageNumbers.filter((_, i) => !checkQuality(pageTexts[i] ?? ''));
++  const markdown = await toMarkdown(workingPdfPath);
++
++  const visionPages: VisionPage[] = [];
++  for (const pageNumber of visionPageNumbers) {
++    const imagePath = await renderPage(workingPdfPath, pageNumber, path.join(workDir, 'vision-pages'));
++    visionPages.push({ pageNumber, imagePath });
++  }
++
++  return {
++    markdown,
++    visionPages,
++    ranOcr,
++    archivalPdfPath: ranOcr ? workingPdfPath : filePath,
++  };
++}
+diff --git a/src/extract/markitdown.ts b/src/extract/markitdown.ts
+new file mode 100644
+index 0000000..1f83169
+--- /dev/null
++++ b/src/extract/markitdown.ts
+@@ -0,0 +1,7 @@
++import { config } from '../config/index.js';
++import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
++
++export async function convertToMarkdown(filePath: string, execFile: ExecFileFn = defaultExecFile): Promise<string> {
++  const { stdout } = await execFile(config.markitdown.binary, [filePath]);
++  return stdout;
++}
+diff --git a/src/extract/ocr.ts b/src/extract/ocr.ts
+new file mode 100644
+index 0000000..2a14cf9
+--- /dev/null
++++ b/src/extract/ocr.ts
+@@ -0,0 +1,18 @@
++import { config } from '../config/index.js';
++import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
++
++export async function ocrPdf(
++  inputPath: string,
++  outputPath: string,
++  execFile: ExecFileFn = defaultExecFile,
++): Promise<void> {
++  await execFile(config.ocr.binary, [
++    '-l',
++    config.ocr.languages,
++    '--deskew',
++    '--rotate-pages',
++    '--skip-text',
++    inputPath,
++    outputPath,
++  ]);
++}
+diff --git a/src/extract/pdfText.ts b/src/extract/pdfText.ts
+new file mode 100644
+index 0000000..67f0697
+--- /dev/null
++++ b/src/extract/pdfText.ts
+@@ -0,0 +1,43 @@
++import { config } from '../config/index.js';
++import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
++
++const MIN_CHARS = 100;
++const MIN_ALPHANUMERIC_RATIO = 0.6;
++const ALPHANUMERIC_PATTERN = /[a-zA-Z0-9äöüÄÖÜß]/g;
++
++/**
++ * Cheap proxy for "is this actual language, or OCR/handwriting garbage" - raw character
++ * count alone isn't enough (Tesseract garbage like "l|i1l!! O0--_x~~" easily clears 100
++ * chars). Exact threshold is tunable; see docs/superpowers/specs/2026-07-23-pdf-solve-pipeline-design.md.
++ */
++export function isQualityText(text: string): boolean {
++  const nonWhitespace = text.replace(/\s/g, '');
++  if (nonWhitespace.length < MIN_CHARS) return false;
++  const alphanumericCount = (nonWhitespace.match(ALPHANUMERIC_PATTERN) ?? []).length;
++  return alphanumericCount / nonWhitespace.length >= MIN_ALPHANUMERIC_RATIO;
++}
++
++export async function getPdfPageCount(pdfPath: string, execFile: ExecFileFn = defaultExecFile): Promise<number> {
++  const { stdout } = await execFile(config.poppler.pdfinfoBin, [pdfPath]);
++  const match = stdout.match(/^Pages:\s+(\d+)/m);
++  if (!match) {
++    throw new Error(`extract/pdfText: could not determine page count for "${pdfPath}"`);
++  }
++  return Number(match[1]);
++}
++
++export async function getPageText(
++  pdfPath: string,
++  pageNumber: number,
++  execFile: ExecFileFn = defaultExecFile,
++): Promise<string> {
++  const { stdout } = await execFile(config.poppler.pdftotextBin, [
++    '-f',
++    String(pageNumber),
++    '-l',
++    String(pageNumber),
++    pdfPath,
++    '-',
++  ]);
++  return stdout;
++}
+diff --git a/src/extract/renderPage.ts b/src/extract/renderPage.ts
+new file mode 100644
+index 0000000..b75de1b
+--- /dev/null
++++ b/src/extract/renderPage.ts
+@@ -0,0 +1,50 @@
++import { promises as fs } from 'node:fs';
++import * as path from 'node:path';
++import { config } from '../config/index.js';
++import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
++
++export interface RenderPageDeps {
++  execFile?: ExecFileFn;
++  mkdir?: (dir: string) => Promise<unknown>;
++  readdir?: (dir: string) => Promise<string[]>;
++}
++
++export async function renderPageToPng(
++  pdfPath: string,
++  pageNumber: number,
++  outputDir: string,
++  deps: RenderPageDeps = {},
++): Promise<string> {
++  const execFile = deps.execFile ?? defaultExecFile;
++  const mkdir = deps.mkdir ?? ((dir: string) => fs.mkdir(dir, { recursive: true }));
++  const readdir = deps.readdir ?? ((dir: string) => fs.readdir(dir));
++
++  await mkdir(outputDir);
++  const prefix = path.join(outputDir, `page-${pageNumber}`);
++  await execFile(config.poppler.pdftoppmBin, [
++    '-png',
++    '-r',
++    '150',
++    '-f',
++    String(pageNumber),
++    '-l',
++    String(pageNumber),
++    pdfPath,
++    prefix,
++  ]);
++
++  // pdftoppm appends its own page-number suffix even for a single-page range (e.g.
++  // page-2-1.png), and the exact suffix format varies by poppler version - list the dir
++  // instead of guessing the filename.
++  const entries = await readdir(outputDir);
++  const filenamePrefix = `page-${pageNumber}`;
++  const match = entries.find((name) => {
++    if (!name.startsWith(filenamePrefix) || !name.endsWith('.png')) return false;
++    const boundaryChar = name[filenamePrefix.length];
++    return boundaryChar === undefined || !/[0-9]/.test(boundaryChar);
++  });
++  if (!match) {
++    throw new Error(`extract/renderPage: pdftoppm did not produce an image for page ${pageNumber}`);
++  }
++  return path.join(outputDir, match);
++}
+diff --git a/src/fach.ts b/src/fach.ts
+new file mode 100644
+index 0000000..1df4e13
+--- /dev/null
++++ b/src/fach.ts
+@@ -0,0 +1,30 @@
++export const FACH_KEYS = [
++  'BGWP',
++  'Englisch',
++  'Deutsch',
++  'IT',
++  'AEuP',
++  'PuG',
++  'IT-Tec',
++  'Religion',
++  '_Unsortiert',
++] as const;
++
++export type FachKey = (typeof FACH_KEYS)[number];
++
++/**
++ * Fixed, closed set - deliberately not dynamic. Guards against folder-naming drift
++ * (typos/near-duplicate folders from LLM output). Extend by hand when a new class starts;
++ * see docs/superpowers/specs/2026-07-23-pdf-solve-pipeline-design.md.
++ */
++export const FACH_SUBPATH: Record<FachKey, string> = {
++  BGWP: 'BGWP/Grünig',
++  Englisch: 'Englisch',
++  Deutsch: 'Deutsch',
++  IT: 'FU-IT',
++  AEuP: 'AEuP',
++  PuG: 'PuG',
++  'IT-Tec': 'IT-Tec',
++  Religion: 'Religion',
++  _Unsortiert: '_Unsortiert',
++};
+diff --git a/src/lib/execFile.ts b/src/lib/execFile.ts
+new file mode 100644
+index 0000000..f669aa3
+--- /dev/null
++++ b/src/lib/execFile.ts
+@@ -0,0 +1,9 @@
++import { execFile as execFileCallback } from 'node:child_process';
++import { promisify } from 'node:util';
++
++export type ExecFileFn = (
++  file: string,
++  args: readonly string[],
++) => Promise<{ stdout: string; stderr: string }>;
++
++export const defaultExecFile: ExecFileFn = promisify(execFileCallback);
+diff --git a/src/nextcloud/writeResult.ts b/src/nextcloud/writeResult.ts
+index 0bb2555..eb28f2f 100644
+--- a/src/nextcloud/writeResult.ts
++++ b/src/nextcloud/writeResult.ts
+@@ -1,99 +1,88 @@
+ import { promises as fs } from 'node:fs';
+-import { execFile as execFileCallback } from 'node:child_process';
+ import * as path from 'node:path';
+-import { promisify } from 'node:util';
+ import pino from 'pino';
+ import { config } from '../config/index.js';
+-import type { NextcloudWriter } from '../types.js';
++import { FACH_SUBPATH } from '../fach.js';
++import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
++import type { NextcloudWriteContent, NextcloudWriter, ProcessedFileResult } from '../types.js';
+ 
+ const logger = pino({ name: 'nextcloud-writer' });
+ 
+-const RESULT_SUBFOLDER = 'teams-task-agent';
+-
+-type ExecFileFn = (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
+-
+-const defaultExecFile: ExecFileFn = promisify(execFileCallback);
++const RESULT_ROOT = 'Fächer';
++const MATERIAL_SUBDIRNAME = 'Material';
+ 
+ export interface NextcloudWriterDeps {
+-  /**
+-   * Injection point for the `occ` invocation, used by tests to stub out the
+-   * CLI call without depending on a real Nextcloud install. Defaults to
+-   * Node's promisified `child_process.execFile`.
+-   */
+   execFile?: ExecFileFn;
+ }
+ 
+ /**
+- * Neutralizes path separators and parent-directory traversal sequences in a
+- * filename. `originalFileName` ultimately originates from an external Graph
+- * API response, so it must never be trusted to build a filesystem path
+- * directly (e.g. `../../etc/passwd` or `foo/bar.txt`).
++ * Neutralizes path separators and parent-directory traversal sequences. `originalFileName`
++ * and `lernfeld` are not trusted to be safe for direct filesystem-path construction (e.g.
++ * `../../etc/passwd` or `foo/bar.txt`).
+  */
+-function sanitizeBaseName(name: string): string {
++function sanitizePathSegment(name: string): string {
+   const withoutSeparators = name.replace(/[/\\]/g, '_');
+   const withoutTraversal = withoutSeparators.replace(/\.\./g, '_');
+   const trimmed = withoutTraversal.trim();
+   return trimmed.length > 0 ? trimmed : 'untitled';
+ }
+ 
+-/**
+- * Derives the markdown result filename from the original filename by
+- * stripping its extension (if any, gracefully handling filenames with none)
+- * and appending `.tasks.md`.
+- */
+-function deriveResultFileName(originalFileName: string): string {
+-  const safeBase = sanitizeBaseName(originalFileName);
++function deriveTargetDir(result: ProcessedFileResult): string[] {
++  const fachSubpath = FACH_SUBPATH[result.fach].split('/').map(sanitizePathSegment);
++  const parts = [RESULT_ROOT, ...fachSubpath];
++  if (result.isMaterialblatt) {
++    parts.push(MATERIAL_SUBDIRNAME);
++  } else if (result.lernfeld) {
++    parts.push(sanitizePathSegment(result.lernfeld));
++  }
++  return parts;
++}
++
++function deriveFileName(result: ProcessedFileResult, content: NextcloudWriteContent, datum: string): string {
++  const safeBase = sanitizePathSegment(result.originalFileName);
+   const ext = path.extname(safeBase);
+   const stem = ext.length > 0 ? safeBase.slice(0, -ext.length) : safeBase;
+   const finalStem = stem.length > 0 ? stem : 'untitled';
+-  return `${finalStem}.tasks.md`;
++
++  if (content.kind === 'pdf') {
++    return `${finalStem}_Loesung_${datum}.pdf`;
++  }
++  const materialExt = path.extname(content.sourcePath) || '.txt';
++  return `${finalStem}_${datum}${materialExt}`;
+ }
+ 
+ export function createNextcloudWriter(deps: NextcloudWriterDeps = {}): NextcloudWriter {
+   const execFile = deps.execFile ?? defaultExecFile;
+ 
+   return {
+-    async writeResult(result, _originalFile) {
++    async writeResult(result, content, datum) {
+       const targetUser = config.nextcloud.targetUser();
+-      const targetDir = path.join(config.nextcloud.dataDir(), targetUser, 'files', RESULT_SUBFOLDER);
+-      const fileName = deriveResultFileName(result.originalFileName);
++      const dirParts = deriveTargetDir(result);
++      const targetDir = path.join(config.nextcloud.dataDir(), targetUser, 'files', ...dirParts);
++      const fileName = deriveFileName(result, content, datum);
+       const writtenPath = path.join(targetDir, fileName);
+ 
+-      // Defense in depth: sanitizeBaseName already strips separators/`..`
+-      // from fileName, so this should be structurally impossible to trip,
+-      // but we verify it anyway before touching the filesystem.
+       const resolvedTargetDir = path.resolve(targetDir);
+       const resolvedWrittenPath = path.resolve(writtenPath);
+-      if (
+-        resolvedWrittenPath !== resolvedTargetDir &&
+-        !resolvedWrittenPath.startsWith(resolvedTargetDir + path.sep)
+-      ) {
++      if (resolvedWrittenPath !== resolvedTargetDir && !resolvedWrittenPath.startsWith(resolvedTargetDir + path.sep)) {
+         throw new Error(`Refusing to write outside of target directory: ${writtenPath}`);
+       }
+ 
+       await fs.mkdir(targetDir, { recursive: true });
+-      await fs.writeFile(writtenPath, result.summaryMarkdown, 'utf8');
++      if (content.kind === 'pdf') {
++        await fs.writeFile(writtenPath, content.bytes);
++      } else {
++        await fs.copyFile(content.sourcePath, writtenPath);
++      }
+ 
+-      // Scope the rescan to just this user's subfolder (rather than a full
+-      // instance-wide `files:scan`) for efficiency. `occ files:scan` accepts
+-      // a `--path=<user>/files/<subpath>` option (leading slash optional) to
+-      // limit the scan to one user's directory tree; see
+-      // https://docs.nextcloud.com/server/latest/admin_manual/occ_command.html#files-label
+-      const scanPath = `/${targetUser}/files/${RESULT_SUBFOLDER}`;
++      const scanPath = `/${targetUser}/files/${dirParts.join('/')}`;
+       try {
+         await execFile(config.nextcloud.occBinary, ['files:scan', `--path=${scanPath}`]);
+       } catch (err) {
+-        // The file write already succeeded, which is the important side
+-        // effect here — the rescan is just to make it show up immediately.
+-        // A failed rescan (missing occ binary, Nextcloud down, etc.) means
+-        // the file will instead be picked up on Nextcloud's next periodic
+-        // background scan, or when the user opens the containing folder.
+-        // We log and swallow rather than throw so callers don't treat a
+-        // successful write as a failure.
+         logger.error({ err, scanPath }, 'occ files:scan failed after writing Nextcloud result file');
+       }
+ 
+       return { writtenPath };
+     },
+   };
+ }
+diff --git a/src/pdf/buildMarkdown.ts b/src/pdf/buildMarkdown.ts
+new file mode 100644
+index 0000000..49cf086
+--- /dev/null
++++ b/src/pdf/buildMarkdown.ts
+@@ -0,0 +1,49 @@
++import { config } from '../config/index.js';
++import { escapeForPandoc } from './escape.js';
++import type { ProcessedFileResult, TaskSolution } from '../types.js';
++
++function escapeYamlString(text: string): string {
++  return text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
++}
++
++function buildFrontmatter(result: ProcessedFileResult, datum: string): string {
++  const lines = [
++    '---',
++    'lang: de',
++    `fach: "${escapeYamlString(result.fach)}"`,
++    result.lernfeld ? `lernfeld: "${escapeYamlString(result.lernfeld)}"` : undefined,
++    `thema: "${escapeYamlString(result.thema)} – Lösungen"`,
++    `name: "${escapeYamlString(config.student.name())}"`,
++    `klasse: "${escapeYamlString(config.student.klasse())}"`,
++    `datum: "${escapeYamlString(datum)}"`,
++    '---',
++  ];
++  return lines.filter((line): line is string => line !== undefined).join('\n');
++}
++
++function buildTaskBlock(task: TaskSolution, index: number): string {
++  const number = index + 1;
++  const lines = [
++    ':::: {.task}',
++    `## ${number}. ${escapeForPandoc(task.title)}`,
++    '',
++    '::: {.frage}',
++    escapeForPandoc(task.taskDescription),
++    ':::',
++    '',
++    '::: {.antwort}',
++    escapeForPandoc(task.proposedSolution),
++    ':::',
++  ];
++  if (task.quelle) {
++    lines.push('', '::: {.quelle}', escapeForPandoc(task.quelle), ':::');
++  }
++  lines.push('::::');
++  return lines.join('\n');
++}
++
++export function buildSolutionMarkdown(result: ProcessedFileResult, datum: string): string {
++  const frontmatter = buildFrontmatter(result, datum);
++  const blocks = result.tasksFound.map((task, index) => buildTaskBlock(task, index));
++  return `${frontmatter}\n\n${blocks.join('\n\n')}\n`;
++}
+diff --git a/src/pdf/escape.ts b/src/pdf/escape.ts
+new file mode 100644
+index 0000000..176060b
+--- /dev/null
++++ b/src/pdf/escape.ts
+@@ -0,0 +1,14 @@
++/**
++ * Neutralizes markdown/pandoc structural syntax in LLM-authored text before it's embedded
++ * into a hand-built pandoc document (fenced divs for Frage/Antwort/Quelle blocks). LLM
++ * output is not trusted to be syntactically safe for whatever it's interpolated into - same
++ * posture as sanitizeBaseName() in nextcloud/writeResult.ts for filenames. Ordinary markdown
++ * (bold, lists, balanced inline code) is left alone; only breaks the specific sequences that
++ * would corrupt the surrounding pandoc template (stray fence runs, raw HTML, unbalanced code).
++ */
++export function escapeForPandoc(text: string): string {
++  const noRawHtml = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
++  const noFenceRuns = noRawHtml.replace(/:::+/g, (run) => run.split('').join('​'));
++  const backtickCount = (noFenceRuns.match(/`/g) ?? []).length;
++  return backtickCount % 2 === 0 ? noFenceRuns : `${noFenceRuns}\``;
++}
+diff --git a/src/pdf/renderPdf.ts b/src/pdf/renderPdf.ts
+new file mode 100644
+index 0000000..62f2272
+--- /dev/null
++++ b/src/pdf/renderPdf.ts
+@@ -0,0 +1,43 @@
++import { promises as fs } from 'node:fs';
++import * as os from 'node:os';
++import * as path from 'node:path';
++import { randomUUID } from 'node:crypto';
++import { config } from '../config/index.js';
++import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
++
++export interface RenderPdfDeps {
++  execFile?: ExecFileFn;
++  writeFile?: (path: string, data: string) => Promise<void>;
++  readFile?: (path: string) => Promise<Buffer>;
++  rm?: (path: string) => Promise<void>;
++}
++
++export async function renderSolutionPdf(markdown: string, deps: RenderPdfDeps = {}): Promise<Buffer> {
++  const execFile = deps.execFile ?? defaultExecFile;
++  const writeFile = deps.writeFile ?? ((p: string, data: string) => fs.writeFile(p, data, 'utf8'));
++  const readFile = deps.readFile ?? ((p: string) => fs.readFile(p));
++  const rm = deps.rm ?? ((p: string) => fs.rm(p, { force: true }));
++
++  const jobId = randomUUID();
++  const mdPath = path.join(os.tmpdir(), `${jobId}.md`);
++  const pdfPath = path.join(os.tmpdir(), `${jobId}.pdf`);
++
++  await writeFile(mdPath, markdown);
++  try {
++    await execFile(config.pandoc.binary, [
++      mdPath,
++      '--template',
++      config.pandoc.templatePath,
++      '--css',
++      config.pandoc.cssPath,
++      '--pdf-engine',
++      config.pandoc.weasyprintBinary,
++      '-o',
++      pdfPath,
++    ]);
++    return await readFile(pdfPath);
++  } finally {
++    await rm(mdPath);
++    await rm(pdfPath);
++  }
++}
+diff --git a/src/types.ts b/src/types.ts
+index 059f0ed..02cfb95 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -1,24 +1,43 @@
+-export interface DownloadedFile {
+-  fileName: string;
+-  mimeType: string;
+-  content: Buffer;
+-}
++import type { FachKey } from './fach.js';
+ 
+ export interface TaskSolution {
++  title: string;
+   taskDescription: string;
+   proposedSolution: string;
++  quelle?: string;
+ }
+ 
+ export interface ProcessedFileResult {
+   originalFileName: string;
++  isMaterialblatt: boolean;
++  fach: FachKey;
++  lernfeld?: string;
++  thema: string;
+   tasksFound: TaskSolution[];
+-  summaryMarkdown: string;
++}
++
++export interface VisionPage {
++  pageNumber: number;
++  imagePath: string;
++}
++
++export interface ExtractionResult {
++  markdown: string;
++  visionPages: VisionPage[];
++  ranOcr: boolean;
++  archivalPdfPath: string;
+ }
+ 
+ export interface FileProcessor {
+-  processFile(file: DownloadedFile): Promise<ProcessedFileResult>;
++  processFile(fileName: string, extraction: ExtractionResult): Promise<ProcessedFileResult>;
+ }
+ 
++export type NextcloudWriteContent = { kind: 'pdf'; bytes: Buffer } | { kind: 'material'; sourcePath: string };
++
+ export interface NextcloudWriter {
+-  writeResult(result: ProcessedFileResult, originalFile: DownloadedFile): Promise<{ writtenPath: string }>;
++  writeResult(
++    result: ProcessedFileResult,
++    content: NextcloudWriteContent,
++    datum: string,
++  ): Promise<{ writtenPath: string }>;
+ }
+diff --git a/src/worker/index.ts b/src/worker/index.ts
+index e4f36c7..5bd53f9 100644
+--- a/src/worker/index.ts
++++ b/src/worker/index.ts
+@@ -1,65 +1,92 @@
+ import { promises as fs } from 'node:fs';
+ import * as path from 'node:path';
++import { randomUUID } from 'node:crypto';
+ import { Worker, type Job } from 'bullmq';
+-import mime from 'mime-types';
+ import pino from 'pino';
+ import { QUEUE_NAME, getRedisConnection, type FileJobData } from '../queue/index.js';
++import { extractFile } from '../extract/index.js';
+ import { createFileProcessor } from '../claude/processFile.js';
++import { buildSolutionMarkdown } from '../pdf/buildMarkdown.js';
++import { renderSolutionPdf } from '../pdf/renderPdf.js';
+ import { createNextcloudWriter } from '../nextcloud/writeResult.js';
+ import { config } from '../config/index.js';
+-import type { DownloadedFile } from '../types.js';
++import type { NextcloudWriteContent } from '../types.js';
+ 
+ const logger = pino({ name: 'worker' });
+ 
+ const fileProcessor = createFileProcessor();
+ const nextcloudWriter = createNextcloudWriter();
+ 
+-/**
+- * Moves a job's source file out of the ingest watcher's active tree (into `.processed` or
+- * `.failed`) so it's never picked up again, then removes the staging directory it came from
+- * if that was left empty (zip-extracted files each live in their own staging subdirectory).
+- */
++function today(): string {
++  return new Date().toISOString().slice(0, 10);
++}
++
+ async function archiveFile(filePath: string, dirName: string): Promise<void> {
+   const watchDir = path.resolve(config.ingest.watchDir);
+   const destDir = path.join(watchDir, dirName);
+   await fs.mkdir(destDir, { recursive: true });
+   const dest = path.join(destDir, `${Date.now()}-${path.basename(filePath)}`);
+   await fs.rename(filePath, dest);
+ 
+   const sourceDir = path.dirname(filePath);
+   if (sourceDir !== watchDir) {
+     await fs.rmdir(sourceDir).catch(() => undefined);
+   }
+ }
+ 
++async function removeOriginalIfArchivedElsewhere(filePath: string, archivalPath: string): Promise<void> {
++  if (archivalPath !== filePath) {
++    await fs.rm(filePath, { force: true }).catch(() => undefined);
++  }
++}
++
+ async function handleJob(job: Job<FileJobData>): Promise<void> {
+   const { filePath, originalFileName } = job.data;
+   logger.info({ jobId: job.id, filePath, originalFileName }, 'processing file job');
+ 
+-  const content = await fs.readFile(filePath);
+-  const file: DownloadedFile = {
+-    fileName: originalFileName,
+-    mimeType: mime.lookup(originalFileName) || 'application/octet-stream',
+-    content,
+-  };
+-
++  // Kept inside watchDir (in the same ignored staging subfolder the ingest watcher uses for
++  // zip extraction) rather than os.tmpdir(), so it's on the same filesystem/device as the
++  // archive destinations - fs.rename() in archiveFile() can't cross a device boundary (EXDEV).
++  const workDir = path.join(path.resolve(config.ingest.watchDir), config.ingest.stagingDirName, randomUUID());
++  let archivalPath = filePath;
+   try {
+-    const result = await fileProcessor.processFile(file);
+-    const { writtenPath } = await nextcloudWriter.writeResult(result, file);
+-    await archiveFile(filePath, config.ingest.processedDirName);
++    await fs.mkdir(workDir, { recursive: true });
++    const extraction = await extractFile(filePath, workDir);
++    archivalPath = extraction.archivalPdfPath;
++
++    const result = await fileProcessor.processFile(originalFileName, extraction);
++    const datum = today();
++
++    let content: NextcloudWriteContent;
++    if (result.isMaterialblatt) {
++      content = { kind: 'material', sourcePath: extraction.archivalPdfPath };
++    } else {
++      const markdown = buildSolutionMarkdown(result, datum);
++      const pdfBytes = await renderSolutionPdf(markdown);
++      content = { kind: 'pdf', bytes: pdfBytes };
++    }
++
++    const { writtenPath } = await nextcloudWriter.writeResult(result, content, datum);
++    await archiveFile(archivalPath, config.ingest.processedDirName);
++    await removeOriginalIfArchivedElsewhere(filePath, archivalPath);
+     logger.info({ jobId: job.id, writtenPath, tasksFound: result.tasksFound.length }, 'file job complete');
+   } catch (err) {
+-    await archiveFile(filePath, config.ingest.failedDirName).catch((archiveErr: unknown) => {
+-      logger.error({ archiveErr, filePath }, 'Failed to archive file after processing failure');
++    await archiveFile(archivalPath, config.ingest.failedDirName).catch((archiveErr: unknown) => {
++      logger.error({ archiveErr, filePath: archivalPath }, 'Failed to archive file after processing failure');
+     });
++    await removeOriginalIfArchivedElsewhere(filePath, archivalPath);
+     throw err;
++  } finally {
++    // Always clean up the scratch dir (OCR output, vision-fallback page images), whether the
++    // job succeeded, failed, or archiving failed - it's created fresh per job and never reused.
++    await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+   }
+ }
+ 
+ export function createFileJobWorker(): Worker<FileJobData> {
+   const worker = new Worker<FileJobData>(QUEUE_NAME, handleJob, {
+     connection: getRedisConnection(),
+   });
+ 
+   worker.on('failed', (job, err) => {
+     logger.error({ jobId: job?.id, err }, 'file job failed');
+diff --git a/test/config.test.ts b/test/config.test.ts
+new file mode 100644
+index 0000000..c0a8132
+--- /dev/null
++++ b/test/config.test.ts
+@@ -0,0 +1,39 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++const REQUIRED_ENV = {
++  NEXTCLOUD_DATA_DIR: '/data',
++  NEXTCLOUD_TARGET_USER: 'alice',
++  STUDENT_NAME: 'Elias Helmer',
++  STUDENT_KLASSE: 'IT10b',
++};
++
++describe('config defaults', () => {
++  const originalEnv = { ...process.env };
++
++  beforeEach(() => {
++    vi.resetModules();
++    for (const [key, value] of Object.entries(REQUIRED_ENV)) process.env[key] = value;
++    delete process.env.INGEST_WATCH_DIR;
++    delete process.env.ANTHROPIC_MODEL;
++  });
++
++  afterEach(() => {
++    process.env = { ...originalEnv };
++  });
++
++  it('defaults INGEST_WATCH_DIR to __INBOX__', async () => {
++    const { config } = await import('../src/config/index.js');
++    expect(config.ingest.watchDir).toBe('__INBOX__');
++  });
++
++  it('defaults ANTHROPIC_MODEL to claude-sonnet-5', async () => {
++    const { config } = await import('../src/config/index.js');
++    expect(config.anthropic.model).toBe('claude-sonnet-5');
++  });
++
++  it('exposes required STUDENT_NAME / STUDENT_KLASSE', async () => {
++    const { config } = await import('../src/config/index.js');
++    expect(config.student.name()).toBe('Elias Helmer');
++    expect(config.student.klasse()).toBe('IT10b');
++  });
++});
+diff --git a/test/extract/index.test.ts b/test/extract/index.test.ts
+new file mode 100644
+index 0000000..fb3fc03
+--- /dev/null
++++ b/test/extract/index.test.ts
+@@ -0,0 +1,127 @@
++import { afterEach, beforeEach, describe, expect, it } from 'vitest';
++import { promises as fs } from 'node:fs';
++import * as os from 'node:os';
++import * as path from 'node:path';
++import { extractFile } from '../../src/extract/index.js';
++
++describe('extractFile', () => {
++  let tmpDir: string;
++  let workDir: string;
++
++  beforeEach(async () => {
++    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'extract-test-'));
++    workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'extract-work-'));
++  });
++
++  afterEach(async () => {
++    await fs.rm(tmpDir, { recursive: true, force: true });
++    await fs.rm(workDir, { recursive: true, force: true });
++  });
++
++  it('passes .txt/.md files through as-is, with no OCR/vision involved', async () => {
++    const filePath = path.join(tmpDir, 'notes.md');
++    await fs.writeFile(filePath, '# Notes\n\n- [ ] follow up');
++
++    const result = await extractFile(filePath, workDir);
++
++    expect(result).toEqual({
++      markdown: '# Notes\n\n- [ ] follow up',
++      visionPages: [],
++      ranOcr: false,
++      archivalPdfPath: filePath,
++    });
++  });
++
++  it('rejects unsupported file types', async () => {
++    const filePath = path.join(tmpDir, 'photo.jpg');
++    await fs.writeFile(filePath, 'irrelevant');
++
++    await expect(extractFile(filePath, workDir)).rejects.toThrow(/unsupported file type/);
++  });
++
++  it('uses MarkItDown directly (no OCR) when every page already has a good text layer', async () => {
++    const filePath = path.join(tmpDir, 'typed.pdf');
++    await fs.writeFile(filePath, 'irrelevant - pdfinfo/pdftotext are stubbed');
++
++    const goodText = 'x'.repeat(150); // clears MIN_CHARS + alphanumeric ratio via the stub below
++    const deps = {
++      getPdfPageCount: async () => 2,
++      getPageText: async () => goodText,
++      isQualityText: () => true,
++      ocrPdf: async () => {
++        throw new Error('should not be called');
++      },
++      convertToMarkdown: async (path_: string) => `markdown for ${path_}`,
++      renderPageToPng: async () => {
++        throw new Error('should not be called');
++      },
++    };
++
++    const result = await extractFile(filePath, workDir, deps);
++
++    expect(result).toEqual({
++      markdown: `markdown for ${filePath}`,
++      visionPages: [],
++      ranOcr: false,
++      archivalPdfPath: filePath,
++    });
++  });
++
++  it('OCRs the PDF when a page fails the quality gate, then re-checks the OCR output', async () => {
++    const filePath = path.join(tmpDir, 'scan.pdf');
++    await fs.writeFile(filePath, 'irrelevant');
++    const ocrOutputPath = path.join(workDir, 'ocr.pdf');
++
++    let ocrCalled = false;
++    const deps = {
++      getPdfPageCount: async () => 1,
++      getPageText: async (pdfPath: string) => (pdfPath === filePath ? 'garbled scan text' : 'clean ocr text'.repeat(20)),
++      isQualityText: (text: string) => text.startsWith('clean'),
++      ocrPdf: async (input: string, output: string) => {
++        expect(input).toBe(filePath);
++        expect(output).toBe(ocrOutputPath);
++        ocrCalled = true;
++      },
++      convertToMarkdown: async (path_: string) => `markdown for ${path_}`,
++      renderPageToPng: async () => {
++        throw new Error('should not be called - OCR output passed the quality gate');
++      },
++    };
++
++    const result = await extractFile(filePath, workDir, deps);
++
++    expect(ocrCalled).toBe(true);
++    expect(result).toEqual({
++      markdown: `markdown for ${ocrOutputPath}`,
++      visionPages: [],
++      ranOcr: true,
++      archivalPdfPath: ocrOutputPath,
++    });
++  });
++
++  it('falls back to vision for pages that still fail the quality gate after OCR', async () => {
++    const filePath = path.join(tmpDir, 'handwritten.pdf');
++    await fs.writeFile(filePath, 'irrelevant');
++    const ocrOutputPath = path.join(workDir, 'ocr.pdf');
++    const visionImagePath = path.join(workDir, 'vision-pages', 'page-1-1.png');
++
++    const deps = {
++      getPdfPageCount: async () => 1,
++      getPageText: async () => 'still garbled after ocr',
++      isQualityText: () => false,
++      ocrPdf: async () => undefined,
++      convertToMarkdown: async (path_: string) => `markdown for ${path_}`,
++      renderPageToPng: async (pdfPath: string, pageNumber: number) => {
++        expect(pdfPath).toBe(ocrOutputPath);
++        expect(pageNumber).toBe(1);
++        return visionImagePath;
++      },
++    };
++
++    const result = await extractFile(filePath, workDir, deps);
++
++    expect(result.visionPages).toEqual([{ pageNumber: 1, imagePath: visionImagePath }]);
++    expect(result.ranOcr).toBe(true);
++    expect(result.archivalPdfPath).toBe(ocrOutputPath);
++  });
++});
+diff --git a/test/extract/markitdown.test.ts b/test/extract/markitdown.test.ts
+new file mode 100644
+index 0000000..2aa6524
+--- /dev/null
++++ b/test/extract/markitdown.test.ts
+@@ -0,0 +1,17 @@
++import { describe, expect, it } from 'vitest';
++import { convertToMarkdown } from '../../src/extract/markitdown.js';
++
++describe('convertToMarkdown', () => {
++  it('invokes the MarkItDown binary on the given file and returns its stdout', async () => {
++    const calls: Array<{ file: string; args: readonly string[] }> = [];
++    const execFile = async (file: string, args: readonly string[]) => {
++      calls.push({ file, args });
++      return { stdout: '# Extracted heading\n\nBody text.', stderr: '' };
++    };
++
++    const markdown = await convertToMarkdown('/tmp/doc.pdf', execFile);
++
++    expect(markdown).toBe('# Extracted heading\n\nBody text.');
++    expect(calls).toEqual([{ file: '/app/.venv/bin/markitdown', args: ['/tmp/doc.pdf'] }]);
++  });
++});
+diff --git a/test/extract/ocr.test.ts b/test/extract/ocr.test.ts
+new file mode 100644
+index 0000000..073f2f8
+--- /dev/null
++++ b/test/extract/ocr.test.ts
+@@ -0,0 +1,21 @@
++import { describe, expect, it } from 'vitest';
++import { ocrPdf } from '../../src/extract/ocr.js';
++
++describe('ocrPdf', () => {
++  it('invokes ocrmypdf with the expected flags and paths', async () => {
++    const calls: Array<{ file: string; args: readonly string[] }> = [];
++    const execFile = async (file: string, args: readonly string[]) => {
++      calls.push({ file, args });
++      return { stdout: '', stderr: '' };
++    };
++
++    await ocrPdf('/tmp/in.pdf', '/tmp/out.pdf', execFile);
++
++    expect(calls).toEqual([
++      {
++        file: 'ocrmypdf',
++        args: ['-l', 'deu+eng', '--deskew', '--rotate-pages', '--skip-text', '/tmp/in.pdf', '/tmp/out.pdf'],
++      },
++    ]);
++  });
++});
+diff --git a/test/extract/pdfText.test.ts b/test/extract/pdfText.test.ts
+new file mode 100644
+index 0000000..958b3ce
+--- /dev/null
++++ b/test/extract/pdfText.test.ts
+@@ -0,0 +1,49 @@
++import { describe, expect, it } from 'vitest';
++import { getPageText, getPdfPageCount, isQualityText } from '../../src/extract/pdfText.js';
++
++describe('isQualityText', () => {
++  it('rejects text under the minimum character threshold', () => {
++    expect(isQualityText('too short')).toBe(false);
++  });
++
++  it('accepts long, mostly-alphanumeric prose', () => {
++    const prose =
++      'Der Käufer kann gemäß Paragraph 437 BGB zunächst Nacherfüllung verlangen, ' +
++      'wenn die gelieferte Ware einen Sachmangel aufweist und die Gewährleistung greift.';
++    expect(isQualityText(prose)).toBe(true);
++  });
++
++  it('rejects long OCR gibberish even though it clears the character-count threshold', () => {
++    const gibberish = 'l|i1l!! O0--_x~~ '.repeat(10);
++    expect(isQualityText(gibberish)).toBe(false);
++  });
++});
++
++describe('getPdfPageCount', () => {
++  it('parses the page count from pdfinfo output', async () => {
++    const execFile = async (file: string, args: readonly string[]) => {
++      expect(file).toBe('pdfinfo');
++      expect(args).toEqual(['/tmp/doc.pdf']);
++      return { stdout: 'Title: none\nPages:          4\nEncrypted: no\n', stderr: '' };
++    };
++    await expect(getPdfPageCount('/tmp/doc.pdf', execFile)).resolves.toBe(4);
++  });
++
++  it('throws a clear error when pdfinfo output has no Pages line', async () => {
++    const execFile = async () => ({ stdout: 'garbage', stderr: '' });
++    await expect(getPdfPageCount('/tmp/doc.pdf', execFile)).rejects.toThrow(/could not determine page count/);
++  });
++});
++
++describe('getPageText', () => {
++  it('scopes pdftotext to a single page via -f/-l', async () => {
++    const calls: Array<{ file: string; args: readonly string[] }> = [];
++    const execFile = async (file: string, args: readonly string[]) => {
++      calls.push({ file, args });
++      return { stdout: 'page three text', stderr: '' };
++    };
++    const text = await getPageText('/tmp/doc.pdf', 3, execFile);
++    expect(text).toBe('page three text');
++    expect(calls).toEqual([{ file: 'pdftotext', args: ['-f', '3', '-l', '3', '/tmp/doc.pdf', '-'] }]);
++  });
++});
+diff --git a/test/extract/renderPage.test.ts b/test/extract/renderPage.test.ts
+new file mode 100644
+index 0000000..53d3160
+--- /dev/null
++++ b/test/extract/renderPage.test.ts
+@@ -0,0 +1,44 @@
++import { describe, expect, it } from 'vitest';
++import { renderPageToPng } from '../../src/extract/renderPage.js';
++
++describe('renderPageToPng', () => {
++  it('invokes pdftoppm scoped to one page and returns the produced PNG path', async () => {
++    const execCalls: Array<{ file: string; args: readonly string[] }> = [];
++    const execFile = async (file: string, args: readonly string[]) => {
++      execCalls.push({ file, args });
++      return { stdout: '', stderr: '' };
++    };
++    const mkdir = async () => undefined;
++    const readdir = async () => ['page-2-1.png', 'unrelated.txt'];
++
++    const result = await renderPageToPng('/tmp/doc.pdf', 2, '/tmp/vision-pages', { execFile, mkdir, readdir });
++
++    expect(result).toBe('/tmp/vision-pages/page-2-1.png');
++    expect(execCalls).toEqual([
++      {
++        file: 'pdftoppm',
++        args: ['-png', '-r', '150', '-f', '2', '-l', '2', '/tmp/doc.pdf', '/tmp/vision-pages/page-2'],
++      },
++    ]);
++  });
++
++  it('throws a clear error when pdftoppm produces no matching file', async () => {
++    const execFile = async () => ({ stdout: '', stderr: '' });
++    const mkdir = async () => undefined;
++    const readdir = async () => ['unrelated.txt'];
++
++    await expect(
++      renderPageToPng('/tmp/doc.pdf', 5, '/tmp/vision-pages', { execFile, mkdir, readdir }),
++    ).rejects.toThrow(/did not produce an image for page 5/);
++  });
++
++  it('correctly distinguishes page-1 from page-10+ when both exist', async () => {
++    const execFile = async () => ({ stdout: '', stderr: '' });
++    const mkdir = async () => undefined;
++    const readdir = async () => ['page-10-1.png', 'page-1-1.png'];
++
++    const result = await renderPageToPng('/tmp/doc.pdf', 1, '/tmp/vision-pages', { execFile, mkdir, readdir });
++
++    expect(result).toBe('/tmp/vision-pages/page-1-1.png');
++  });
++});
+diff --git a/test/nextcloudWriter.test.ts b/test/nextcloudWriter.test.ts
+index 07ea653..bf2759a 100644
+--- a/test/nextcloudWriter.test.ts
++++ b/test/nextcloudWriter.test.ts
+@@ -1,30 +1,26 @@
+ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+ import { promises as fs } from 'node:fs';
+ import * as os from 'node:os';
+ import * as path from 'node:path';
+ import { createNextcloudWriter } from '../src/nextcloud/writeResult.js';
+-import type { DownloadedFile, ProcessedFileResult } from '../src/types.js';
++import type { ProcessedFileResult } from '../src/types.js';
+ 
+ const TARGET_USER = 'alice';
+ 
+-const originalFile: DownloadedFile = {
+-  fileName: 'meeting-notes.docx',
+-  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+-  content: Buffer.from('irrelevant binary content'),
+-};
+-
+ function makeResult(overrides: Partial<ProcessedFileResult> = {}): ProcessedFileResult {
+   return {
+-    originalFileName: 'meeting-notes.docx',
+-    tasksFound: [{ taskDescription: 'Send follow-up email', proposedSolution: 'Draft and send by Friday' }],
+-    summaryMarkdown: '# Summary\n\n- Send follow-up email: Draft and send by Friday\n',
++    originalFileName: 'arbeitsblatt1.pdf',
++    isMaterialblatt: false,
++    fach: 'BGWP',
++    thema: 'Kaufvertragsrecht',
++    tasksFound: [],
+     ...overrides,
+   };
+ }
+ 
+ const okExecFile = async (): Promise<{ stdout: string; stderr: string }> => ({ stdout: '', stderr: '' });
+ 
+ describe('createNextcloudWriter().writeResult', () => {
+   let tmpDir: string;
+ 
+   beforeEach(async () => {
+@@ -32,99 +28,97 @@ describe('createNextcloudWriter().writeResult', () => {
+     process.env.NEXTCLOUD_DATA_DIR = tmpDir;
+     process.env.NEXTCLOUD_TARGET_USER = TARGET_USER;
+   });
+ 
+   afterEach(async () => {
+     delete process.env.NEXTCLOUD_DATA_DIR;
+     delete process.env.NEXTCLOUD_TARGET_USER;
+     await fs.rm(tmpDir, { recursive: true, force: true });
+   });
+ 
+-  it('creates the expected file with the expected content under {dataDir}/{targetUser}/files/teams-task-agent/', async () => {
++  it('writes a solved PDF under Fächer/<Fach>/<subpath>/ with a date-suffixed filename', async () => {
+     const writer = createNextcloudWriter({ execFile: okExecFile });
+-    const result = makeResult();
+-
+-    const { writtenPath } = await writer.writeResult(result, originalFile);
++    const pdfBytes = Buffer.from('%PDF-1.4 fake');
+ 
+-    const expectedDir = path.join(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
+-    expect(writtenPath).toBe(path.join(expectedDir, 'meeting-notes.tasks.md'));
++    const { writtenPath } = await writer.writeResult(makeResult(), { kind: 'pdf', bytes: pdfBytes }, '2026-07-23');
+ 
+-    const content = await fs.readFile(writtenPath, 'utf8');
+-    expect(content).toBe(result.summaryMarkdown);
++    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
++    expect(writtenPath).toBe(expectedPath);
++    expect(await fs.readFile(writtenPath)).toEqual(pdfBytes);
+   });
+ 
+-  it('handles filenames with no extension gracefully', async () => {
++  it('nests under lernfeld when present', async () => {
+     const writer = createNextcloudWriter({ execFile: okExecFile });
+-    const result = makeResult({ originalFileName: 'report' });
++    const result = makeResult({ fach: 'IT-Tec', lernfeld: 'LF 3' });
+ 
+-    const { writtenPath } = await writer.writeResult(result, originalFile);
++    const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
+ 
+-    expect(path.basename(writtenPath)).toBe('report.tasks.md');
+-    const content = await fs.readFile(writtenPath, 'utf8');
+-    expect(content).toBe(result.summaryMarkdown);
++    expect(writtenPath).toBe(
++      path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'IT-Tec', 'LF 3', 'arbeitsblatt1_Loesung_2026-07-23.pdf'),
++    );
+   });
+ 
+-  it('does not let a "../../etc/passwd" originalFileName escape the target directory', async () => {
++  it('routes an unclassifiable Fach to Fächer/_Unsortiert/', async () => {
+     const writer = createNextcloudWriter({ execFile: okExecFile });
+-    const result = makeResult({ originalFileName: '../../etc/passwd' });
++    const result = makeResult({ fach: '_Unsortiert' });
+ 
+-    const { writtenPath } = await writer.writeResult(result, originalFile);
++    const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
+ 
+-    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
+-    const resolvedWritten = path.resolve(writtenPath);
++    expect(writtenPath).toBe(
++      path.join(tmpDir, TARGET_USER, 'files', 'Fächer', '_Unsortiert', 'arbeitsblatt1_Loesung_2026-07-23.pdf'),
++    );
++  });
+ 
+-    expect(resolvedWritten.startsWith(expectedDir + path.sep)).toBe(true);
+-    expect(resolvedWritten).not.toContain('..');
++  it('routes Materialblatt content into Fächer/<Fach>/Material/ with no _Loesung suffix, preserving the source extension', async () => {
++    const writer = createNextcloudWriter({ execFile: okExecFile });
++    const materialSourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'material-src-'));
++    const sourcePath = path.join(materialSourceDir, 'gesetzestext.pdf');
++    await fs.writeFile(sourcePath, 'source bytes');
++
++    const result = makeResult({ isMaterialblatt: true, fach: 'Deutsch', originalFileName: 'gesetzestext.pdf' });
++    const { writtenPath } = await writer.writeResult(result, { kind: 'material', sourcePath }, '2026-07-23');
+ 
+-    const stat = await fs.stat(writtenPath);
+-    expect(stat.isFile()).toBe(true);
++    expect(writtenPath).toBe(
++      path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'Deutsch', 'Material', 'gesetzestext_2026-07-23.pdf'),
++    );
++    expect(await fs.readFile(writtenPath, 'utf8')).toBe('source bytes');
+ 
+-    // Make sure nothing was written outside the sandboxed temp dir.
+-    await expect(fs.stat('/etc/passwd.tasks.md')).rejects.toThrow();
++    await fs.rm(materialSourceDir, { recursive: true, force: true });
+   });
+ 
+-  it('does not let a filename containing "/" escape the target directory', async () => {
++  it('sanitizes a path-traversal originalFileName before it ever reaches the filesystem', async () => {
+     const writer = createNextcloudWriter({ execFile: okExecFile });
+-    const result = makeResult({ originalFileName: 'sneaky/sub/dir/evil.txt' });
++    const result = makeResult({ originalFileName: '../../etc/passwd' });
+ 
+-    const { writtenPath } = await writer.writeResult(result, originalFile);
++    const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
+ 
+-    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
++    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig');
+     const resolvedWritten = path.resolve(writtenPath);
+-
+     expect(resolvedWritten.startsWith(expectedDir + path.sep)).toBe(true);
+-    expect(path.dirname(resolvedWritten)).toBe(expectedDir);
++    expect(resolvedWritten).not.toContain('..');
+   });
+ 
+   it('still resolves successfully with the correct writtenPath if occ files:scan fails', async () => {
+     const failingExecFile = async (): Promise<{ stdout: string; stderr: string }> => {
+       throw new Error('spawn occ ENOENT');
+     };
+     const writer = createNextcloudWriter({ execFile: failingExecFile });
+-    const result = makeResult();
+-
+-    const { writtenPath } = await writer.writeResult(result, originalFile);
+ 
+-    const expectedDir = path.join(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
+-    expect(writtenPath).toBe(path.join(expectedDir, 'meeting-notes.tasks.md'));
++    const { writtenPath } = await writer.writeResult(makeResult(), { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
+ 
+-    const content = await fs.readFile(writtenPath, 'utf8');
+-    expect(content).toBe(result.summaryMarkdown);
++    expect(await fs.stat(writtenPath).then(() => true)).toBe(true);
+   });
+ 
+-  it('invokes occ files:scan scoped to the target user files subfolder', async () => {
++  it('invokes occ files:scan scoped to the computed Fach/Lernfeld target directory', async () => {
+     const calls: Array<{ file: string; args: readonly string[] }> = [];
+-    const recordingExecFile = async (
+-      file: string,
+-      args: readonly string[],
+-    ): Promise<{ stdout: string; stderr: string }> => {
++    const recordingExecFile = async (file: string, args: readonly string[]) => {
+       calls.push({ file, args });
+       return { stdout: '', stderr: '' };
+     };
+     const writer = createNextcloudWriter({ execFile: recordingExecFile });
+ 
+-    await writer.writeResult(makeResult(), originalFile);
++    await writer.writeResult(makeResult(), { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
+ 
+     expect(calls).toHaveLength(1);
+-    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/teams-task-agent`]);
++    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP/Grünig`]);
+   });
+ });
+diff --git a/test/pdf/buildMarkdown.test.ts b/test/pdf/buildMarkdown.test.ts
+new file mode 100644
+index 0000000..0eb643f
+--- /dev/null
++++ b/test/pdf/buildMarkdown.test.ts
+@@ -0,0 +1,105 @@
++import { afterEach, beforeEach, describe, expect, it } from 'vitest';
++import { buildSolutionMarkdown } from '../../src/pdf/buildMarkdown.js';
++import type { ProcessedFileResult } from '../../src/types.js';
++
++function makeResult(overrides: Partial<ProcessedFileResult> = {}): ProcessedFileResult {
++  return {
++    originalFileName: 'arbeitsblatt1.pdf',
++    isMaterialblatt: false,
++    fach: 'BGWP',
++    thema: 'Kaufvertragsrecht',
++    tasksFound: [
++      {
++        title: 'Mangelhafte Lieferung',
++        taskDescription: 'Welche Rechte hat der Käufer bei einem Sachmangel?',
++        proposedSolution: 'Nacherfüllung nach § 439 BGB.',
++        quelle: '§ 437, § 439 BGB',
++      },
++    ],
++    ...overrides,
++  };
++}
++
++describe('buildSolutionMarkdown', () => {
++  beforeEach(() => {
++    process.env.STUDENT_NAME = 'Elias Helmer';
++    process.env.STUDENT_KLASSE = 'IT10b';
++  });
++
++  afterEach(() => {
++    delete process.env.STUDENT_NAME;
++    delete process.env.STUDENT_KLASSE;
++  });
++
++  it('includes frontmatter with fach, thema, name, klasse, and the given datum', () => {
++    const md = buildSolutionMarkdown(makeResult(), '2026-07-23');
++
++    expect(md).toContain('fach: "BGWP"');
++    expect(md).toContain('thema: "Kaufvertragsrecht – Lösungen"');
++    expect(md).toContain('name: "Elias Helmer"');
++    expect(md).toContain('klasse: "IT10b"');
++    expect(md).toContain('datum: "2026-07-23"');
++  });
++
++  it('omits the lernfeld frontmatter line when not present', () => {
++    const md = buildSolutionMarkdown(makeResult(), '2026-07-23');
++    expect(md).not.toContain('lernfeld:');
++  });
++
++  it('includes the lernfeld frontmatter line when present', () => {
++    const md = buildSolutionMarkdown(makeResult({ lernfeld: 'LF 3' }), '2026-07-23');
++    expect(md).toContain('lernfeld: "LF 3"');
++  });
++
++  it('renders one numbered task block with nested frage/antwort/quelle fenced divs', () => {
++    const md = buildSolutionMarkdown(makeResult(), '2026-07-23');
++
++    expect(md).toContain(':::: {.task}');
++    expect(md).toContain('## 1. Mangelhafte Lieferung');
++    expect(md).toContain('::: {.frage}');
++    expect(md).toContain('Welche Rechte hat der Käufer bei einem Sachmangel?');
++    expect(md).toContain('::: {.antwort}');
++    expect(md).toContain('Nacherfüllung nach § 439 BGB.');
++    expect(md).toContain('::: {.quelle}');
++    expect(md).toContain('§ 437, § 439 BGB');
++    expect(md).toContain('::::');
++  });
++
++  it('omits the quelle block for a task with no quelle', () => {
++    const result = makeResult({
++      tasksFound: [
++        { title: 'Ohne Quelle', taskDescription: 'Frage ohne Quelle', proposedSolution: 'Antwort ohne Quelle' },
++      ],
++    });
++    const md = buildSolutionMarkdown(result, '2026-07-23');
++    expect(md).not.toContain('{.quelle}');
++  });
++
++  it('numbers multiple tasks sequentially', () => {
++    const result = makeResult({
++      tasksFound: [
++        { title: 'Erste', taskDescription: 'F1', proposedSolution: 'A1' },
++        { title: 'Zweite', taskDescription: 'F2', proposedSolution: 'A2' },
++      ],
++    });
++    const md = buildSolutionMarkdown(result, '2026-07-23');
++    expect(md).toContain('## 1. Erste');
++    expect(md).toContain('## 2. Zweite');
++  });
++
++  it('escapes LLM-authored text through escapeForPandoc before embedding it', () => {
++    const result = makeResult({
++      tasksFound: [
++        {
++          title: 'Titel mit ::: Fence',
++          taskDescription: 'Frage mit ::: drin',
++          proposedSolution: 'Antwort mit <script>alert(1)</script>',
++        },
++      ],
++    });
++    const md = buildSolutionMarkdown(result, '2026-07-23');
++
++    expect(md).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
++    expect(md).not.toContain('<script>');
++  });
++});
+diff --git a/test/pdf/escape.test.ts b/test/pdf/escape.test.ts
+new file mode 100644
+index 0000000..9e17cbc
+--- /dev/null
++++ b/test/pdf/escape.test.ts
+@@ -0,0 +1,30 @@
++import { describe, expect, it } from 'vitest';
++import { escapeForPandoc } from '../../src/pdf/escape.js';
++
++describe('escapeForPandoc', () => {
++  it('leaves normal prose, bold, lists, and inline code untouched', () => {
++    const text = '**Wichtig:** siehe `§ 439 BGB`.\n- Punkt eins\n- Punkt zwei';
++    expect(escapeForPandoc(text)).toBe(text);
++  });
++
++  it('breaks a run of 3+ colons so it cannot be parsed as a pandoc fenced-div fence', () => {
++    const result = escapeForPandoc('Text mit ::: mittendrin und :::: auch');
++    expect(result).not.toMatch(/:::/);
++    // The zero-width breaks are invisible when rendered, so stripping them recovers the colons.
++    expect(result.replace(/​/g, '')).toBe('Text mit ::: mittendrin und :::: auch');
++  });
++
++  it('escapes raw HTML angle brackets so they cannot be parsed as a raw HTML block', () => {
++    expect(escapeForPandoc('Vergleiche a < b und <script>alert(1)</script>')).toBe(
++      'Vergleiche a &lt; b und &lt;script&gt;alert(1)&lt;/script&gt;',
++    );
++  });
++
++  it('appends a closing backtick when the input has an odd number of backticks', () => {
++    expect(escapeForPandoc('unbalanced `code')).toBe('unbalanced `code`');
++  });
++
++  it('does not touch already-balanced backticks', () => {
++    expect(escapeForPandoc('balanced `code` here')).toBe('balanced `code` here');
++  });
++});
+diff --git a/test/pdf/renderPdf.test.ts b/test/pdf/renderPdf.test.ts
+new file mode 100644
+index 0000000..37e9c79
+--- /dev/null
++++ b/test/pdf/renderPdf.test.ts
+@@ -0,0 +1,77 @@
++import { describe, expect, it } from 'vitest';
++import { renderSolutionPdf } from '../../src/pdf/renderPdf.js';
++
++describe('renderSolutionPdf', () => {
++  it('writes the markdown to a temp file, invokes pandoc with the configured template/css/engine, reads back the PDF bytes, and cleans up the temp file', async () => {
++    const writeCalls: Array<{ path: string; data: string }> = [];
++    const execCalls: Array<{ file: string; args: readonly string[] }> = [];
++    const rmCalls: string[] = [];
++    const pdfBytes = Buffer.from('%PDF-1.4 fake bytes');
++
++    const deps = {
++      writeFile: async (path: string, data: string) => {
++        writeCalls.push({ path, data });
++      },
++      execFile: async (file: string, args: readonly string[]) => {
++        execCalls.push({ file, args });
++        return { stdout: '', stderr: '' };
++      },
++      readFile: async () => pdfBytes,
++      rm: async (path: string) => {
++        rmCalls.push(path);
++      },
++    };
++
++    const result = await renderSolutionPdf('# hello', deps);
++
++    expect(result).toBe(pdfBytes);
++    expect(writeCalls).toHaveLength(1);
++    expect(writeCalls[0]?.data).toBe('# hello');
++
++    expect(execCalls).toHaveLength(1);
++    const [call] = execCalls;
++    expect(call?.file).toBe('pandoc');
++    expect(call?.args).toEqual([
++      writeCalls[0]?.path,
++      '--template',
++      '/app/vorlage/template.html',
++      '--css',
++      '/app/vorlage/style.css',
++      '--pdf-engine',
++      '/app/.venv/bin/weasyprint',
++      '-o',
++      expect.stringMatching(/\.pdf$/),
++    ]);
++
++    // Cleans up both the temp markdown source and the intermediate PDF it read back from.
++    expect(rmCalls).toHaveLength(2);
++  });
++
++  it('cleans up temp files even when pandoc fails', async () => {
++    const writeCalls: Array<{ path: string; data: string }> = [];
++    const execCalls: Array<{ file: string; args: readonly string[] }> = [];
++    const rmCalls: string[] = [];
++
++    const deps = {
++      writeFile: async (path: string, data: string) => {
++        writeCalls.push({ path, data });
++      },
++      execFile: async (file: string, args: readonly string[]) => {
++        execCalls.push({ file, args });
++        throw new Error('pandoc failed');
++      },
++      readFile: async () => Buffer.from(''),
++      rm: async (path: string) => {
++        rmCalls.push(path);
++      },
++    };
++
++    await expect(renderSolutionPdf('# markdown', deps)).rejects.toThrow('pandoc failed');
++
++    // Verify execFile was called once (before failing)
++    expect(execCalls).toHaveLength(1);
++
++    // Verify cleanup still happened twice despite the pandoc failure
++    expect(rmCalls).toHaveLength(2);
++  });
++});
+diff --git a/test/processFile.test.ts b/test/processFile.test.ts
+index 9741e71..2a10400 100644
+--- a/test/processFile.test.ts
++++ b/test/processFile.test.ts
+@@ -1,161 +1,186 @@
+ import { describe, expect, it } from 'vitest';
+ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+ import { createFileProcessor } from '../src/claude/processFile.js';
+-import type { DownloadedFile } from '../src/types.js';
++import type { ExtractionResult } from '../src/types.js';
+ 
+-// The real SDK spawns a subprocess; nothing in this file ever reaches it — every test
+-// injects a fake `queryFn`. `config.anthropic.apiKey()` is still called for its fail-fast
+-// check, so give it a value (never used to authenticate anything, since we never hit the
+-// network in these tests).
+ process.env.ANTHROPIC_API_KEY ??= 'test-api-key';
+ 
+-function makeFile(overrides: Partial<DownloadedFile> = {}): DownloadedFile {
++function makeExtraction(overrides: Partial<ExtractionResult> = {}): ExtractionResult {
+   return {
+-    fileName: 'notes.md',
+-    mimeType: 'text/markdown',
+-    content: Buffer.from('# Notes\n\n- [ ] Follow up with vendor about pricing\n'),
++    markdown: '# Arbeitsblatt\n\nAufgabe 1: Welche Rechte hat der Käufer bei einem Sachmangel?',
++    visionPages: [],
++    ranOcr: false,
++    archivalPdfPath: '/inbox/arbeitsblatt1.pdf',
+     ...overrides,
+   };
+ }
+ 
+-// Builds a fake `result`-type SDKMessage. Cast through `unknown` rather than filling in
+-// every field of the real (large) SDKResultMessage union — processFile.ts only reads
+-// `type`, `subtype`, `result`, `structured_output`, and `errors`.
+ function makeResultMessage(fields: Record<string, unknown>): SDKMessage {
+   return {
+     type: 'result',
+     duration_ms: 100,
+     duration_api_ms: 90,
+     is_error: false,
+     num_turns: 1,
+     stop_reason: null,
+     total_cost_usd: 0,
+     usage: {},
+     modelUsage: {},
+     permission_denials: [],
+     uuid: 'test-uuid',
+     session_id: 'test-session',
+     ...fields,
+   } as unknown as SDKMessage;
+ }
+ 
++const VALID_STRUCTURED_OUTPUT = {
++  isMaterialblatt: false,
++  fach: 'BGWP',
++  thema: 'Kaufvertragsrecht',
++  tasksFound: [
++    {
++      title: 'Mangelhafte Lieferung',
++      taskDescription: 'Welche Rechte hat der Käufer bei einem Sachmangel?',
++      proposedSolution: 'Nacherfüllung nach § 439 BGB.',
++      quelle: '§ 437, § 439 BGB',
++    },
++  ],
++};
++
+ describe('createFileProcessor', () => {
+   it('returns a correctly parsed ProcessedFileResult given a well-formed SDK response', async () => {
+-    const structuredOutput = {
+-      tasksFound: [
+-        {
+-          taskDescription: 'Follow up with vendor about pricing',
+-          proposedSolution: 'Email the vendor requesting an updated quote by Friday.',
+-        },
+-      ],
+-      summaryMarkdown: 'One open task found regarding vendor pricing follow-up.',
+-    };
+-
+     async function* fakeQuery(): AsyncGenerator<SDKMessage> {
+       yield makeResultMessage({
+         subtype: 'success',
+-        result: JSON.stringify(structuredOutput),
+-        structured_output: structuredOutput,
++        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
++        structured_output: VALID_STRUCTURED_OUTPUT,
+       });
+     }
+ 
+     const processor = createFileProcessor({ queryFn: fakeQuery });
+-    const file = makeFile();
+-
+-    const result = await processor.processFile(file);
++    const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
+ 
+     expect(result).toEqual({
+-      originalFileName: 'notes.md',
+-      tasksFound: structuredOutput.tasksFound,
+-      summaryMarkdown: structuredOutput.summaryMarkdown,
++      originalFileName: 'arbeitsblatt1.pdf',
++      isMaterialblatt: false,
++      fach: 'BGWP',
++      thema: 'Kaufvertragsrecht',
++      tasksFound: VALID_STRUCTURED_OUTPUT.tasksFound,
+     });
+   });
+ 
+-  it('falls back to parsing the plain-text result field when structured_output is absent', async () => {
+-    const shape = {
+-      tasksFound: [
+-        { taskDescription: 'Decide on venue', proposedSolution: 'Book The Grand Hall by end of week.' },
+-      ],
+-      summaryMarkdown: 'One pending decision found.',
+-    };
+-
+-    async function* fakeQuery(): AsyncGenerator<SDKMessage> {
+-      yield makeResultMessage({ subtype: 'success', result: JSON.stringify(shape) });
++  it('passes model=claude-sonnet-5 to the SDK by default', async () => {
++    let capturedModel: unknown;
++    async function* fakeQuery(params: { prompt: unknown; options?: { model?: string } }): AsyncGenerator<SDKMessage> {
++      capturedModel = params.options?.model;
++      yield makeResultMessage({
++        subtype: 'success',
++        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
++        structured_output: VALID_STRUCTURED_OUTPUT,
++      });
+     }
+ 
+     const processor = createFileProcessor({ queryFn: fakeQuery });
+-    const result = await processor.processFile(makeFile());
++    await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
+ 
+-    expect(result.tasksFound).toEqual(shape.tasksFound);
+-    expect(result.summaryMarkdown).toBe(shape.summaryMarkdown);
++    expect(capturedModel).toBe('claude-sonnet-5');
+   });
+ 
+-  it('throws a clear error given an unparseable (non-JSON) SDK response, rather than returning empty/garbage data', async () => {
+-    async function* fakeQuery(): AsyncGenerator<SDKMessage> {
+-      yield makeResultMessage({ subtype: 'success', result: 'this is not valid json {{{' });
++  it('includes the extracted markdown in a plain string prompt when there are no vision pages', async () => {
++    let capturedPrompt: unknown;
++    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
++      capturedPrompt = params.prompt;
++      yield makeResultMessage({
++        subtype: 'success',
++        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
++        structured_output: VALID_STRUCTURED_OUTPUT,
++      });
+     }
+ 
+     const processor = createFileProcessor({ queryFn: fakeQuery });
++    await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
+ 
+-    await expect(processor.processFile(makeFile())).rejects.toThrow(/not valid JSON/);
++    expect(typeof capturedPrompt).toBe('string');
++    expect(capturedPrompt as string).toContain('Welche Rechte hat der Käufer');
+   });
+ 
+-  it('throws a clear error when the parsed JSON is missing required fields', async () => {
+-    async function* fakeQuery(): AsyncGenerator<SDKMessage> {
++  it('sends an async-iterable multi-content prompt with image blocks when vision pages are present', async () => {
++    let capturedPrompt: unknown;
++    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
++      capturedPrompt = params.prompt;
+       yield makeResultMessage({
+         subtype: 'success',
+-        result: JSON.stringify({ unrelated: true }),
+-        structured_output: { unrelated: true },
++        result: JSON.stringify(VALID_STRUCTURED_OUTPUT),
++        structured_output: VALID_STRUCTURED_OUTPUT,
+       });
+     }
+ 
+-    const processor = createFileProcessor({ queryFn: fakeQuery });
++    const processor = createFileProcessor({
++      queryFn: fakeQuery,
++      readImageFile: async () => Buffer.from('fake-png-bytes'),
++    });
++    const extraction = makeExtraction({ visionPages: [{ pageNumber: 1, imagePath: '/tmp/page-1.png' }] });
++
++    await processor.processFile('handwritten.pdf', extraction);
+ 
+-    await expect(processor.processFile(makeFile())).rejects.toThrow(/tasksFound/);
++    expect(typeof capturedPrompt).toBe('object');
++    const messages: Array<{ message: { content: Array<{ type: string }> } }> = [];
++    for await (const message of capturedPrompt as AsyncIterable<{ message: { content: Array<{ type: string }> } }>) {
++      messages.push(message);
++    }
++    expect(messages).toHaveLength(1);
++    const blockTypes = messages[0]?.message.content.map((block) => block.type);
++    expect(blockTypes).toEqual(['text', 'image']);
+   });
+ 
+-  it('throws a clear error when a task entry is malformed', async () => {
++  it('throws a clear error when the parsed JSON is missing required fields', async () => {
+     async function* fakeQuery(): AsyncGenerator<SDKMessage> {
+-      const bad = { tasksFound: [{ taskDescription: 'missing solution field' }], summaryMarkdown: 'x' };
+-      yield makeResultMessage({ subtype: 'success', result: JSON.stringify(bad), structured_output: bad });
++      yield makeResultMessage({
++        subtype: 'success',
++        result: JSON.stringify({ unrelated: true }),
++        structured_output: { unrelated: true },
++      });
+     }
+ 
+     const processor = createFileProcessor({ queryFn: fakeQuery });
+ 
+-    await expect(processor.processFile(makeFile())).rejects.toThrow(/proposedSolution/);
++    await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/isMaterialblatt/);
+   });
+ 
+   it('throws a clear error when the SDK query itself fails (non-success subtype)', async () => {
+     async function* fakeQuery(): AsyncGenerator<SDKMessage> {
+       yield makeResultMessage({ subtype: 'error_during_execution', errors: ['model overloaded'] });
+     }
+ 
+     const processor = createFileProcessor({ queryFn: fakeQuery });
+ 
+-    await expect(processor.processFile(makeFile())).rejects.toThrow(/Claude query failed/);
++    await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/Claude query failed/);
+   });
+ 
+   it('throws a clear error when the SDK yields no result message at all', async () => {
+     async function* fakeQuery(): AsyncGenerator<SDKMessage> {
+       // yields nothing
+     }
+ 
+     const processor = createFileProcessor({ queryFn: fakeQuery });
+ 
+-    await expect(processor.processFile(makeFile())).rejects.toThrow(/received no result/);
++    await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/received no result/);
+   });
+ 
+-  it('rejects unsupported (binary) file types before ever calling the SDK', async () => {
+-    let called = false;
++  it('returns isMaterialblatt=true with an empty tasksFound for reference material', async () => {
++    const materialOutput = { isMaterialblatt: true, fach: 'Deutsch', thema: 'Grammatikregeln', tasksFound: [] };
+     async function* fakeQuery(): AsyncGenerator<SDKMessage> {
+-      called = true;
+-      yield makeResultMessage({ subtype: 'success', result: '{}' });
++      yield makeResultMessage({
++        subtype: 'success',
++        result: JSON.stringify(materialOutput),
++        structured_output: materialOutput,
++      });
+     }
+ 
+     const processor = createFileProcessor({ queryFn: fakeQuery });
+-    const file = makeFile({ fileName: 'report.pdf', mimeType: 'application/pdf' });
++    const result = await processor.processFile('handout.pdf', makeExtraction());
+ 
+-    await expect(processor.processFile(file)).rejects.toThrow(/unsupported file type/i);
+-    expect(called).toBe(false);
++    expect(result.isMaterialblatt).toBe(true);
++    expect(result.tasksFound).toEqual([]);
+   });
+ });
+diff --git a/test/worker.test.ts b/test/worker.test.ts
+index 1e3507e..e7ef652 100644
+--- a/test/worker.test.ts
++++ b/test/worker.test.ts
+@@ -1,111 +1,187 @@
+ import { describe, expect, it, vi, beforeEach } from 'vitest';
+ 
++const extractFile = vi.fn();
++const buildSolutionMarkdown = vi.fn();
++const renderSolutionPdf = vi.fn();
+ const processFile = vi.fn();
+ const writeResult = vi.fn();
+-const readFile = vi.fn();
+ const mkdir = vi.fn();
+ const rename = vi.fn();
+ const rmdir = vi.fn();
++const rm = vi.fn();
++const randomUUID = vi.fn();
+ 
+ vi.mock('node:fs', () => ({
+-  promises: { readFile, mkdir, rename, rmdir },
+-}));
+-vi.mock('../src/claude/processFile.js', () => ({
+-  createFileProcessor: () => ({ processFile }),
+-}));
+-vi.mock('../src/nextcloud/writeResult.js', () => ({
+-  createNextcloudWriter: () => ({ writeResult }),
++  promises: { mkdir, rename, rmdir, rm },
+ }));
++vi.mock('node:crypto', () => ({ randomUUID }));
++vi.mock('../src/extract/index.js', () => ({ extractFile }));
++vi.mock('../src/pdf/buildMarkdown.js', () => ({ buildSolutionMarkdown }));
++vi.mock('../src/pdf/renderPdf.js', () => ({ renderSolutionPdf }));
++vi.mock('../src/claude/processFile.js', () => ({ createFileProcessor: () => ({ processFile }) }));
++vi.mock('../src/nextcloud/writeResult.js', () => ({ createNextcloudWriter: () => ({ writeResult }) }));
+ vi.mock('../src/queue/index.js', () => ({
+   QUEUE_NAME: 'teams-file-jobs',
+   getRedisConnection: () => ({}),
+ }));
+ vi.mock('bullmq', () => ({
+   Worker: vi.fn().mockImplementation(() => ({ on: vi.fn() })),
+ }));
+ 
+-// Fixed so job filePaths below can be asserted against a known watchDir - config.ingest is
+-// evaluated eagerly at import time, so this must be set before src/worker/index.js is loaded.
+ process.env.INGEST_WATCH_DIR = '/inbox';
+ 
++const AUFGABENBLATT_RESULT = {
++  originalFileName: 'arbeitsblatt1.pdf',
++  isMaterialblatt: false,
++  fach: 'BGWP',
++  thema: 'Kaufvertragsrecht',
++  tasksFound: [{ title: 't', taskDescription: 'q', proposedSolution: 'a' }],
++};
++
++const MATERIAL_RESULT = {
++  originalFileName: 'handout.pdf',
++  isMaterialblatt: true,
++  fach: 'Deutsch',
++  thema: 'Grammatikregeln',
++  tasksFound: [],
++};
++
+ describe('worker pipeline', () => {
+   beforeEach(() => {
+     vi.clearAllMocks();
++    randomUUID.mockReturnValue('job-abc123');
+     mkdir.mockResolvedValue(undefined);
+     rename.mockResolvedValue(undefined);
+     rmdir.mockResolvedValue(undefined);
++    rm.mockResolvedValue(undefined);
+   });
+ 
+-  it('reads, processes, and writes a file job end to end, then archives the source file', async () => {
+-    const content = Buffer.from('# hi');
+-    const result = { originalFileName: 'notes.md', tasksFound: [], summaryMarkdown: '# Summary' };
+-    readFile.mockResolvedValue(content);
+-    processFile.mockResolvedValue(result);
+-    writeResult.mockResolvedValue({ writtenPath: '/data/user/files/teams-task-agent/notes.tasks.md' });
++  it('extracts, solves, renders a PDF, writes it, and archives the raw source when OCR did not run', async () => {
++    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/arbeitsblatt1.pdf' });
++    processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
++    buildSolutionMarkdown.mockReturnValue('# solution markdown');
++    renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
++    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf' });
+ 
+     const { createFileJobWorker } = await import('../src/worker/index.js');
+     const { Worker } = await import('bullmq');
+-
+     createFileJobWorker();
+ 
+     const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+-    const job = { id: '1', data: { filePath: '/inbox/notes.md', originalFileName: 'notes.md', receivedAt: 'now' } };
++    const job = { id: '1', data: { filePath: '/inbox/arbeitsblatt1.pdf', originalFileName: 'arbeitsblatt1.pdf', receivedAt: 'now' } };
+     await handler(job);
+ 
+-    expect(readFile).toHaveBeenCalledWith('/inbox/notes.md');
+-    expect(processFile).toHaveBeenCalledWith({ fileName: 'notes.md', mimeType: 'text/markdown', content });
+-    expect(writeResult).toHaveBeenCalledWith(result, { fileName: 'notes.md', mimeType: 'text/markdown', content });
+-
+-    // Source file archived into the processed dir, not left in place.
++    expect(extractFile).toHaveBeenCalledWith('/inbox/arbeitsblatt1.pdf', '/inbox/.staging/job-abc123');
++    expect(processFile).toHaveBeenCalledWith('arbeitsblatt1.pdf', expect.objectContaining({ markdown: '# text' }));
++    expect(buildSolutionMarkdown).toHaveBeenCalledWith(AUFGABENBLATT_RESULT, expect.any(String));
++    expect(renderSolutionPdf).toHaveBeenCalledWith('# solution markdown');
++    expect(writeResult).toHaveBeenCalledWith(
++      AUFGABENBLATT_RESULT,
++      { kind: 'pdf', bytes: Buffer.from('%PDF fake') },
++      expect.any(String),
++    );
++
++    // ranOcr was false, so the ORIGINAL file (not archivalPdfPath) is archived.
+     expect(rename).toHaveBeenCalledTimes(1);
+     const [movedFrom, movedTo] = rename.mock.calls[0] as [string, string];
+-    expect(movedFrom).toBe('/inbox/notes.md');
+-    expect(movedTo).toMatch(/[/\\]\.processed[/\\]\d+-notes\.md$/);
+-    // Source file sat directly in the watch root, not a staging subdir - nothing to clean up.
+-    expect(rmdir).not.toHaveBeenCalled();
++    expect(movedFrom).toBe('/inbox/arbeitsblatt1.pdf');
++    expect(movedTo).toMatch(/[/\\]\.processed[/\\]\d+-arbeitsblatt1\.pdf$/);
++
++    // The per-job scratch dir (created on the same filesystem as watchDir, not os.tmpdir())
++    // is unconditionally removed once the job finishes, success or failure.
++    expect(mkdir).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true });
++    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
++
++    // archivalPath === filePath here (no OCR ran), so archiveFile's rename already moved the
++    // original - the removeOriginalIfArchivedElsewhere helper must be a no-op for this path.
++    expect(rm).not.toHaveBeenCalledWith('/inbox/arbeitsblatt1.pdf', { force: true });
+   });
+ 
+-  it('archives the source file into the failed dir and rethrows when processing fails', async () => {
+-    const content = Buffer.from('# hi');
+-    readFile.mockResolvedValue(content);
+-    processFile.mockRejectedValue(new Error('claude blew up'));
++  it('archives the OCR\'d searchable PDF (not the raw scan) when extraction ran OCR', async () => {
++    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: true, archivalPdfPath: '/inbox/.staging/job-abc123/ocr.pdf' });
++    processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
++    buildSolutionMarkdown.mockReturnValue('# solution markdown');
++    renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
++    writeResult.mockResolvedValue({ writtenPath: '/data/x.pdf' });
+ 
+     const { createFileJobWorker } = await import('../src/worker/index.js');
+     const { Worker } = await import('bullmq');
++    createFileJobWorker();
++
++    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
++    const job = { id: '1', data: { filePath: '/inbox/scan.pdf', originalFileName: 'scan.pdf', receivedAt: 'now' } };
++    await handler(job);
++
++    const [movedFrom] = rename.mock.calls[0] as [string, string];
++    expect(movedFrom).toBe('/inbox/.staging/job-abc123/ocr.pdf');
++
++    // The scratch dir the OCR'd PDF lived in is removed after archiveFile has moved it out -
++    // this is the case archiveFile's own best-effort rmdir can silently fail on (non-recursive,
++    // vision-pages/ subfolder), so the unconditional recursive fs.rm must cover it.
++    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
++
++    // archivalPath (the OCR'd PDF) differs from the original job filePath, so the raw scan
++    // left behind at the watch-dir root must also be removed - otherwise it re-triggers the
++    // chokidar `add` event (ignoreInitial: false) on every ingest/worker restart and gets
++    // re-OCR'd, re-solved, and re-written forever.
++    expect(rm).toHaveBeenCalledWith('/inbox/scan.pdf', { force: true });
++  });
++
++  it('skips PDF generation and writes the archival source directly for a Materialblatt', async () => {
++    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/handout.pdf' });
++    processFile.mockResolvedValue(MATERIAL_RESULT);
++    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/Deutsch/Material/handout_2026-07-23.pdf' });
+ 
++    const { createFileJobWorker } = await import('../src/worker/index.js');
++    const { Worker } = await import('bullmq');
+     createFileJobWorker();
+ 
+     const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+-    const job = { id: '1', data: { filePath: '/inbox/notes.md', originalFileName: 'notes.md', receivedAt: 'now' } };
++    const job = { id: '1', data: { filePath: '/inbox/handout.pdf', originalFileName: 'handout.pdf', receivedAt: 'now' } };
++    await handler(job);
++
++    expect(buildSolutionMarkdown).not.toHaveBeenCalled();
++    expect(renderSolutionPdf).not.toHaveBeenCalled();
++    expect(writeResult).toHaveBeenCalledWith(
++      MATERIAL_RESULT,
++      { kind: 'material', sourcePath: '/inbox/handout.pdf' },
++      expect.any(String),
++    );
++  });
+ 
+-    await expect(handler(job)).rejects.toThrow('claude blew up');
++  it('archives the source into the failed dir and rethrows when extraction fails', async () => {
++    extractFile.mockRejectedValue(new Error('ocrmypdf blew up'));
++
++    const { createFileJobWorker } = await import('../src/worker/index.js');
++    const { Worker } = await import('bullmq');
++    createFileJobWorker();
++
++    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
++    const job = { id: '1', data: { filePath: '/inbox/arbeitsblatt1.pdf', originalFileName: 'arbeitsblatt1.pdf', receivedAt: 'now' } };
++
++    await expect(handler(job)).rejects.toThrow('ocrmypdf blew up');
+ 
+     expect(writeResult).not.toHaveBeenCalled();
+-    expect(rename).toHaveBeenCalledTimes(1);
+     const [, movedTo] = rename.mock.calls[0] as [string, string];
+-    expect(movedTo).toMatch(/[/\\]\.failed[/\\]\d+-notes\.md$/);
+-    expect(rmdir).not.toHaveBeenCalled();
++    expect(movedTo).toMatch(/[/\\]\.failed[/\\]\d+-arbeitsblatt1\.pdf$/);
++
++    // Scratch dir cleanup runs even on the failure path, after the failed-dir archive attempt.
++    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
+   });
+ 
+   it('cleans up a zip-extraction staging directory after archiving the file it contained', async () => {
+-    const content = Buffer.from('# hi');
+-    const result = { originalFileName: 'a.md', tasksFound: [], summaryMarkdown: '# Summary' };
+-    readFile.mockResolvedValue(content);
+-    processFile.mockResolvedValue(result);
+-    writeResult.mockResolvedValue({ writtenPath: '/data/user/files/teams-task-agent/a.tasks.md' });
++    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/.staging/uuid-1/a.md' });
++    processFile.mockResolvedValue({ ...MATERIAL_RESULT, originalFileName: 'a.md' });
++    writeResult.mockResolvedValue({ writtenPath: '/data/x.md' });
+ 
+     const { createFileJobWorker } = await import('../src/worker/index.js');
+     const { Worker } = await import('bullmq');
+-
+     createFileJobWorker();
+ 
+     const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+-    const job = {
+-      id: '1',
+-      data: { filePath: '/inbox/.staging/uuid-1/a.md', originalFileName: 'a.md', receivedAt: 'now' },
+-    };
++    const job = { id: '1', data: { filePath: '/inbox/.staging/uuid-1/a.md', originalFileName: 'a.md', receivedAt: 'now' } };
+     await handler(job);
+ 
+     expect(rmdir).toHaveBeenCalledWith('/inbox/.staging/uuid-1');
+   });
+ });

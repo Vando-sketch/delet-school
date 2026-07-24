@@ -1,7 +1,7 @@
 import { extname } from 'node:path';
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { getPageText, getPdfPageCount, getPagesWithContentImages, isQualityText } from './pdfText.js';
+import { getAllPagesText, getPageText, getPdfPageCount, getPagesWithContentImages, isQualityText } from './pdfText.js';
 import { ocrPdf } from './ocr.js';
 import { convertToMarkdown } from './markitdown.js';
 import { renderPageToPng } from './renderPage.js';
@@ -10,6 +10,7 @@ import type { ExtractionResult, VisionPage } from '../types.js';
 export interface ExtractDeps {
   getPdfPageCount?: typeof getPdfPageCount;
   getPageText?: typeof getPageText;
+  getAllPagesText?: typeof getAllPagesText;
   isQualityText?: typeof isQualityText;
   ocrPdf?: typeof ocrPdf;
   convertToMarkdown?: typeof convertToMarkdown;
@@ -29,6 +30,9 @@ export async function extractFile(
 ): Promise<ExtractionResult> {
   const getPageCount = deps.getPdfPageCount ?? getPdfPageCount;
   const getText = deps.getPageText ?? getPageText;
+  const getAllTexts =
+    deps.getAllPagesText ??
+    ((path: string, count: number) => getAllPagesText(path, count, undefined, getText));
   const checkQuality = deps.isQualityText ?? isQualityText;
   const runOcr = deps.ocrPdf ?? ocrPdf;
   const toMarkdown = deps.convertToMarkdown ?? convertToMarkdown;
@@ -62,7 +66,7 @@ export async function extractFile(
   const pageCount = await getPageCount(filePath);
   const pageNumbers = Array.from({ length: pageCount }, (_, i) => i + 1);
 
-  const originalTexts = await Promise.all(pageNumbers.map((page) => getText(filePath, page)));
+  const originalTexts = await getAllTexts(filePath, pageCount);
   const pagesWithImages = await getPagesWithImages(filePath).catch(() => new Set<number>());
 
   const pageNeedsOcr = (i: number) => {
@@ -82,7 +86,7 @@ export async function extractFile(
     await runOcr(filePath, ocrOutputPath);
     workingPdfPath = ocrOutputPath;
     ranOcr = true;
-    pageTexts = await Promise.all(pageNumbers.map((page) => getText(ocrOutputPath, page)));
+    pageTexts = await getAllTexts(ocrOutputPath, pageCount);
   }
 
   const visionPageNumbers = pageNumbers.filter(

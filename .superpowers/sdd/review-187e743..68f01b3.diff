@@ -1,0 +1,59 @@
+# Review package: 187e7431dfe234c0877ca305f52c2c788aff2da2..feat/ocr-quality-and-subfolder-ingest-task-7
+
+## Commits
+68f01b3 docs: update README for the dictionary OCR gate and subfolder ingest support
+
+## Files changed
+ README.md | 13 ++++++-------
+ 1 file changed, 6 insertions(+), 7 deletions(-)
+
+## Diff
+diff --git a/README.md b/README.md
+index 687b6ed..b5f81c0 100644
+--- a/README.md
++++ b/README.md
+@@ -29,22 +29,23 @@ Worker
+         ├─ 3. Render a styled solution PDF (pandoc + weasyprint) — or, for a pure
+         │      Materialblatt (no tasks), skip straight to filing the source
+         ├─ 4. Write into Nextcloud over WebDAV (via Tailscale):
+         │      Fächer/<Fach>/[<Lernfeld>/]<name>_Loesung_<date>.pdf
+         └─ 5. Archive the source (OCR'd searchable version if OCR ran) into `.processed/`
+              (or `.failed/` on error)
+ ```
+ 
+ ## Layout
+ 
+-- `src/ingest/` — watches a local folder (chokidar) for dropped files; extracts zip archives
+-  and enqueues one job per contained file, or enqueues a single job for any other file directly.
++- `src/ingest/` — watches a local folder and its subfolders (chokidar) for dropped files;
++  extracts zip archives and enqueues one job per contained file, or enqueues a single job for
++  any other file directly.
+ - `src/queue/` — BullMQ queue/connection shared by the ingest watcher and worker.
+ - `src/extract/` — per-page tiered text extraction: MarkItDown for text-layer PDFs,
+   `ocrmypdf`/Tesseract for scans, rendered page images for Claude's vision fallback on
+   handwriting or still-garbled OCR output.
+ - `src/claude/` — Claude Agent SDK integration that classifies the subject (Fach) and
+   Info-/Materialblatt vs. Aufgabenblatt, and solves every task found with citations.
+ - `src/pdf/` — builds the solution Markdown and renders it to a styled PDF via
+   `pandoc`+`weasyprint`.
+ - `src/nextcloud/` — writes the result into Nextcloud under `Fächer/<Fach>/[<Lernfeld>/]` over
+   WebDAV.
+@@ -90,15 +91,13 @@ optional (defaults to claude-sonnet-5, since homework-solving requires more reas
+ 
+ - `npm run typecheck` / `npm run lint` / `npm test` — must all pass before opening a PR (see `CLAUDE.md`).
+ - `npm run build` — compiles to `dist/`.
+ 
+ ## Known open items
+ 
+ - **Breaking change (Nextcloud config)**: The old `NEXTCLOUD_DATA_DIR`, `NEXTCLOUD_TARGET_USER`,
+   and `NEXTCLOUD_OCC_BIN` environment variables are no longer supported. They have been replaced
+   with `NEXTCLOUD_BASE_URL`, `NEXTCLOUD_USERNAME`, and `NEXTCLOUD_APP_PASSWORD` (WebDAV-based).
+   Existing `.env` files must be updated to use the new variables.
+-- The OCR-quality gate (`isQualityText` in `src/extract/pdfText.ts`) uses a simple
+-  alphanumeric-ratio heuristic; a stronger check (e.g. dictionary-based) is a reasonable
+-  follow-up if it proves too permissive/strict in practice.
+-- The ingest watcher watches only the top level of `INGEST_WATCH_DIR` (no subfolders) and
+-  assumes a local/POSIX filesystem.
++- The OCR-quality gate's dictionary-ratio threshold (0.45, `src/extract/pdfText.ts`) is a
++  starting point, not empirically tuned; adjusting it against real scanned/handwritten homework
++  is expected follow-up once this is in regular use.

@@ -1,0 +1,37 @@
+# Review package: 8a02353239bc80df0409f1fd9a6037e18cce404e..feat/ocr-quality-and-subfolder-ingest-task-3
+
+## Commits
+20408b6 feat: install hunspell DE/EN dictionaries in the runtime image
+
+## Files changed
+ docker/Dockerfile | 2 ++
+ 1 file changed, 2 insertions(+)
+
+## Diff
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+index 6b67111..c930c4f 100644
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -21,20 +21,22 @@ RUN npm run build
+ FROM node:20-slim
+ 
+ WORKDIR /app
+ 
+ RUN apt-get update && apt-get install -y --no-install-recommends \
+     poppler-utils \
+     ocrmypdf \
+     tesseract-ocr \
+     tesseract-ocr-deu \
+     tesseract-ocr-eng \
++    hunspell-de-de \
++    hunspell-en-us \
+     pandoc \
+     fonts-liberation \
+     python3 \
+     python3-venv \
+     python3-pip \
+     && rm -rf /var/lib/apt/lists/*
+ 
+ # Dedicated venv for markitdown + weasyprint - same workaround as the old schule-loesen skill
+ # used for weasyprint (Debian's "externally-managed-environment" blocks a bare `pip install`).
+ RUN python3 -m venv /app/.venv \

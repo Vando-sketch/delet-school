@@ -116,6 +116,31 @@ export async function getPageText(
   return stdout;
 }
 
+export async function getAllPagesText(
+  pdfPath: string,
+  pageCount: number,
+  execFile: ExecFileFn = defaultExecFile,
+  getPageTextFn: typeof getPageText = getPageText,
+): Promise<string[]> {
+  try {
+    const { stdout } = await execFile(config.poppler.pdftotextBin, [pdfPath, '-']);
+    const rawPages = stdout.split('\f');
+    // Poppler appends a trailing \f after the last page. Pop empty trailing page if present.
+    if (rawPages.length > 0 && (rawPages[rawPages.length - 1] ?? '').trim() === '') {
+      rawPages.pop();
+    }
+    if (rawPages.length === pageCount) {
+      return rawPages;
+    }
+  } catch (err) {
+    logger.warn({ err, pdfPath }, 'Single-pass pdftotext failed; falling back to per-page extraction');
+  }
+
+  // Fallback to page-by-page getPageText
+  const pageNumbers = Array.from({ length: pageCount }, (_, i) => i + 1);
+  return Promise.all(pageNumbers.map((page) => getPageTextFn(pdfPath, page, execFile)));
+}
+
 export async function getPagesWithContentImages(
   pdfPath: string,
   execFile: ExecFileFn = defaultExecFile,
@@ -144,4 +169,5 @@ export async function getPagesWithContentImages(
     return new Set<number>();
   }
 }
+
 

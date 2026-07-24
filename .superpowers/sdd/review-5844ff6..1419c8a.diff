@@ -1,0 +1,47 @@
+# Review package: 5844ff609f2611a2e737972f1b60e3182c046236..HEAD
+
+## Commits
+1419c8a feat: add MarkItDown CLI wrapper for structured text extraction
+
+## Files changed
+ src/extract/markitdown.ts       |  7 +++++++
+ test/extract/markitdown.test.ts | 17 +++++++++++++++++
+ 2 files changed, 24 insertions(+)
+
+## Diff
+diff --git a/src/extract/markitdown.ts b/src/extract/markitdown.ts
+new file mode 100644
+index 0000000..1f83169
+--- /dev/null
++++ b/src/extract/markitdown.ts
+@@ -0,0 +1,7 @@
++import { config } from '../config/index.js';
++import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
++
++export async function convertToMarkdown(filePath: string, execFile: ExecFileFn = defaultExecFile): Promise<string> {
++  const { stdout } = await execFile(config.markitdown.binary, [filePath]);
++  return stdout;
++}
+diff --git a/test/extract/markitdown.test.ts b/test/extract/markitdown.test.ts
+new file mode 100644
+index 0000000..2aa6524
+--- /dev/null
++++ b/test/extract/markitdown.test.ts
+@@ -0,0 +1,17 @@
++import { describe, expect, it } from 'vitest';
++import { convertToMarkdown } from '../../src/extract/markitdown.js';
++
++describe('convertToMarkdown', () => {
++  it('invokes the MarkItDown binary on the given file and returns its stdout', async () => {
++    const calls: Array<{ file: string; args: readonly string[] }> = [];
++    const execFile = async (file: string, args: readonly string[]) => {
++      calls.push({ file, args });
++      return { stdout: '# Extracted heading\n\nBody text.', stderr: '' };
++    };
++
++    const markdown = await convertToMarkdown('/tmp/doc.pdf', execFile);
++
++    expect(markdown).toBe('# Extracted heading\n\nBody text.');
++    expect(calls).toEqual([{ file: '/app/.venv/bin/markitdown', args: ['/tmp/doc.pdf'] }]);
++  });
++});

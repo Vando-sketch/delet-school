@@ -1,0 +1,172 @@
+# Review package: 582aec0018eabeb64f83dae94662353818f52675..feat/ocr-quality-and-subfolder-ingest-task-5
+
+## Commits
+6bd89b9 fix: archive via renameOrCopy, and only prune staging dirs (not subfolders)
+
+## Files changed
+ src/ingest/watcher.ts |  5 +++--
+ src/worker/index.ts   | 14 ++++++++++++--
+ test/worker.test.ts   | 24 ++++++++++++++++++++++++
+ 3 files changed, 39 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/src/ingest/watcher.ts b/src/ingest/watcher.ts
+index 87287a2..073d108 100644
+--- a/src/ingest/watcher.ts
++++ b/src/ingest/watcher.ts
+@@ -2,20 +2,21 @@ import { mkdirSync, promises as fs } from 'node:fs';
+ import * as path from 'node:path';
+ import { randomUUID } from 'node:crypto';
+ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
+ import AdmZip from 'adm-zip';
+ import pino from 'pino';
+ import type { Queue } from 'bullmq';
+ import { config } from '../config/index.js';
+ import { getFileJobQueue, type FileJobData, type SiblingManifestEntry } from '../queue/index.js';
+ import { createTaildropDrain } from './taildropDrain.js';
+ import { buildSiblingManifest } from './siblingManifest.js';
++import { renameOrCopy } from '../lib/renameOrCopy.js';
+ 
+ const logger = pino({ name: 'ingest-watcher' });
+ 
+ /** Minimal surface of a BullMQ Queue this module needs, so tests can inject a stub. */
+ type FileJobQueueLike = Pick<Queue<FileJobData>, 'add'>;
+ 
+ export interface CreateIngestWatcherOptions {
+   queue?: FileJobQueueLike;
+   /** Overrides config.ingest.watchDir - mainly for tests, which point this at a temp dir. */
+   watchDir?: string;
+@@ -68,26 +69,26 @@ async function listFilesRecursive(dir: string): Promise<string[]> {
+     const fullPath = path.join(dir, entry.name);
+     if (entry.isDirectory()) {
+       files.push(...(await listFilesRecursive(fullPath)));
+     } else if (entry.isFile()) {
+       files.push(fullPath);
+     }
+   }
+   return files;
+ }
+ 
+-/** Moves a fully-handled top-level file into `watchDir/dirName`, timestamp-prefixed to avoid collisions. */
++/** Moves a fully-handled file into `watchDir/dirName`, timestamp-prefixed to avoid collisions. */
+ async function archiveFile(watchDir: string, filePath: string, dirName: string): Promise<void> {
+   const destDir = path.join(watchDir, dirName);
+   await fs.mkdir(destDir, { recursive: true });
+   const dest = path.join(destDir, `${Date.now()}-${path.basename(filePath)}`);
+-  await fs.rename(filePath, dest);
++  await renameOrCopy(filePath, dest);
+ }
+ 
+ /**
+  * A dropped zip is extracted into a staging directory (inside watchDir but excluded from
+  * watching - see `ignored` below), and every file found inside is enqueued as its own job,
+  * mirroring what a Teams "download as zip" export produces (one job per document, same as
+  * dropping the documents in individually). The zip itself is archived once extraction and
+  * enqueueing succeed.
+  */
+ async function handleZip(queue: FileJobQueueLike, watchDir: string, zipPath: string): Promise<void> {
+diff --git a/src/worker/index.ts b/src/worker/index.ts
+index d4e84c8..58bd9eb 100644
+--- a/src/worker/index.ts
++++ b/src/worker/index.ts
+@@ -4,39 +4,49 @@ import { randomUUID } from 'node:crypto';
+ import { Worker, type Job } from 'bullmq';
+ import pino from 'pino';
+ import { QUEUE_NAME, getRedisConnection, type FileJobData } from '../queue/index.js';
+ import { extractFile } from '../extract/index.js';
+ import { createFileProcessor } from '../claude/processFile.js';
+ import { buildSolutionMarkdown } from '../pdf/buildMarkdown.js';
+ import { renderSolutionPdf } from '../pdf/renderPdf.js';
+ import { createNextcloudWriter } from '../nextcloud/writeResult.js';
+ import { config } from '../config/index.js';
+ import type { NextcloudWriteContent } from '../types.js';
++import { renameOrCopy } from '../lib/renameOrCopy.js';
+ 
+ const logger = pino({ name: 'worker' });
+ 
+ const fileProcessor = createFileProcessor();
+ const nextcloudWriter = createNextcloudWriter();
+ 
+ function today(): string {
+   return new Date().toISOString().slice(0, 10);
+ }
+ 
+ async function archiveFile(filePath: string, dirName: string): Promise<void> {
+   const watchDir = path.resolve(config.ingest.watchDir);
+   const destDir = path.join(watchDir, dirName);
+   await fs.mkdir(destDir, { recursive: true });
+   const dest = path.join(destDir, `${Date.now()}-${path.basename(filePath)}`);
+-  await fs.rename(filePath, dest);
++  await renameOrCopy(filePath, dest);
+ 
++  // Only prune the source directory when it's a job-scratch or zip-extraction staging
++  // directory under .staging/ - never a real subfolder of watchDir a file was dropped into
++  // directly. Before subfolder support, `sourceDir !== watchDir` was an adequate proxy for
++  // "this is a staging dir" (the only non-watchDir source a file could ever have). That stops
++  // being true once subfolders are watched: a plain file at watchDir/Mathe/AB1.pdf has
++  // sourceDir = watchDir/Mathe, which is not a staging dir and must be left in place even once
++  // empty (see docs/superpowers/specs/2026-07-24-ocr-quality-and-subfolder-ingest-design.md,
++  // "Explicitly out of scope: empty subfolder cleanup").
++  const stagingRoot = path.join(watchDir, config.ingest.stagingDirName);
+   const sourceDir = path.dirname(filePath);
+-  if (sourceDir !== watchDir) {
++  if (sourceDir === stagingRoot || sourceDir.startsWith(stagingRoot + path.sep)) {
+     await fs.rmdir(sourceDir).catch(() => undefined);
+   }
+ }
+ 
+ async function removeOriginalIfArchivedElsewhere(filePath: string, archivalPath: string): Promise<void> {
+   if (archivalPath !== filePath) {
+     await fs.rm(filePath, { force: true }).catch(() => undefined);
+   }
+ }
+ 
+diff --git a/test/worker.test.ts b/test/worker.test.ts
+index ad3eae3..22da657 100644
+--- a/test/worker.test.ts
++++ b/test/worker.test.ts
+@@ -178,20 +178,44 @@ describe('worker pipeline', () => {
+     const { Worker } = await import('bullmq');
+     createFileJobWorker();
+ 
+     const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+     const job = { id: '1', data: { filePath: '/inbox/.staging/uuid-1/a.md', originalFileName: 'a.md', receivedAt: 'now' } };
+     await handler(job);
+ 
+     expect(rmdir).toHaveBeenCalledWith('/inbox/.staging/uuid-1');
+   });
+ 
++  it('does not prune a subfolder a file was dropped into directly - only .staging dirs get pruned', async () => {
++    extractFile.mockResolvedValue({
++      markdown: '# text',
++      visionPages: [],
++      ranOcr: false,
++      archivalPdfPath: '/inbox/Mathe/AB1.pdf',
++    });
++    processFile.mockResolvedValue({ ...AUFGABENBLATT_RESULT, originalFileName: 'Mathe/AB1.pdf' });
++    buildSolutionMarkdown.mockReturnValue('# solution markdown');
++    renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
++    writeResult.mockResolvedValue({ writtenPath: '/data/x.pdf' });
++
++    const { createFileJobWorker } = await import('../src/worker/index.js');
++    const { Worker } = await import('bullmq');
++    createFileJobWorker();
++
++    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
++    const job = { id: '1', data: { filePath: '/inbox/Mathe/AB1.pdf', originalFileName: 'Mathe/AB1.pdf', receivedAt: 'now' } };
++    await handler(job);
++
++    expect(rename).toHaveBeenCalledTimes(1);
++    expect(rmdir).not.toHaveBeenCalled();
++  });
++
+   it('passes the job\'s siblingManifest through to the file processor when present', async () => {
+     extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/.staging/uuid-2/a.txt' });
+     processFile.mockResolvedValue({ ...MATERIAL_RESULT, originalFileName: 'a.txt' });
+     writeResult.mockResolvedValue({ writtenPath: '/data/x.txt' });
+ 
+     const { createFileJobWorker } = await import('../src/worker/index.js');
+     const { Worker } = await import('bullmq');
+     createFileJobWorker();
+ 
+     const siblingManifest = [{ fileName: 'b.txt', excerpt: 'content of b' }];

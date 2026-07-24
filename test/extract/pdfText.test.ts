@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { config } from '../../src/config/index.js';
 import {
   buildDefaultIsRealWord,
+  getAllPagesText,
   getPageText,
   getPdfPageCount,
   hasQualityAlphanumericRatio,
@@ -99,3 +100,32 @@ describe('getPageText', () => {
     expect(calls).toEqual([{ file: config.poppler.pdftotextBin, args: ['-f', '3', '-l', '3', '/tmp/doc.pdf', '-'] }]);
   });
 });
+
+describe('getAllPagesText', () => {
+  it('splits stdout by form feed \\f and strips trailing \\f correctly', async () => {
+    const mockExecFile = async (file: string, args: readonly string[]) => {
+      expect(file).toBe(config.poppler.pdftotextBin);
+      expect(args).toEqual(['/tmp/doc.pdf', '-']);
+      return { stdout: 'Page 1 Content\fPage 2 Content\fPage 3 Content\f', stderr: '' };
+    };
+    const pages = await getAllPagesText('/tmp/doc.pdf', 3, mockExecFile);
+    expect(pages).toEqual(['Page 1 Content', 'Page 2 Content', 'Page 3 Content']);
+  });
+
+  it('falls back to per-page getPageText when single-pass output page count mismatches', async () => {
+    let callCount = 0;
+    const mockExecFile = async (_file: string, args: readonly string[]) => {
+      callCount++;
+      if (args.length === 2 && args[1] === '-') {
+        // Returns 1 page instead of expected 2
+        return { stdout: 'Single Page Content\f', stderr: '' };
+      }
+      return { stdout: `Fallback Page ${args[1]}`, stderr: '' };
+    };
+
+    const pages = await getAllPagesText('/tmp/doc.pdf', 2, mockExecFile);
+    expect(pages).toEqual(['Fallback Page 1', 'Fallback Page 2']);
+    expect(callCount).toBe(3); // 1 single-pass + 2 per-page calls
+  });
+});
+

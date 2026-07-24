@@ -1,0 +1,115 @@
+# Review package: e88e7fd5447aa6263dfedbc94b06d3ac8ddd60ca..HEAD
+
+## Commits
+674ed90 feat: add per-page PDF text extraction and OCR-quality gate
+
+## Files changed
+ src/extract/pdfText.ts       | 43 ++++++++++++++++++++++++++++++++++++++
+ test/extract/pdfText.test.ts | 49 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 92 insertions(+)
+
+## Diff
+diff --git a/src/extract/pdfText.ts b/src/extract/pdfText.ts
+new file mode 100644
+index 0000000..67f0697
+--- /dev/null
++++ b/src/extract/pdfText.ts
+@@ -0,0 +1,43 @@
++import { config } from '../config/index.js';
++import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
++
++const MIN_CHARS = 100;
++const MIN_ALPHANUMERIC_RATIO = 0.6;
++const ALPHANUMERIC_PATTERN = /[a-zA-Z0-9äöüÄÖÜß]/g;
++
++/**
++ * Cheap proxy for "is this actual language, or OCR/handwriting garbage" - raw character
++ * count alone isn't enough (Tesseract garbage like "l|i1l!! O0--_x~~" easily clears 100
++ * chars). Exact threshold is tunable; see docs/superpowers/specs/2026-07-23-pdf-solve-pipeline-design.md.
++ */
++export function isQualityText(text: string): boolean {
++  const nonWhitespace = text.replace(/\s/g, '');
++  if (nonWhitespace.length < MIN_CHARS) return false;
++  const alphanumericCount = (nonWhitespace.match(ALPHANUMERIC_PATTERN) ?? []).length;
++  return alphanumericCount / nonWhitespace.length >= MIN_ALPHANUMERIC_RATIO;
++}
++
++export async function getPdfPageCount(pdfPath: string, execFile: ExecFileFn = defaultExecFile): Promise<number> {
++  const { stdout } = await execFile(config.poppler.pdfinfoBin, [pdfPath]);
++  const match = stdout.match(/^Pages:\s+(\d+)/m);
++  if (!match) {
++    throw new Error(`extract/pdfText: could not determine page count for "${pdfPath}"`);
++  }
++  return Number(match[1]);
++}
++
++export async function getPageText(
++  pdfPath: string,
++  pageNumber: number,
++  execFile: ExecFileFn = defaultExecFile,
++): Promise<string> {
++  const { stdout } = await execFile(config.poppler.pdftotextBin, [
++    '-f',
++    String(pageNumber),
++    '-l',
++    String(pageNumber),
++    pdfPath,
++    '-',
++  ]);
++  return stdout;
++}
+diff --git a/test/extract/pdfText.test.ts b/test/extract/pdfText.test.ts
+new file mode 100644
+index 0000000..958b3ce
+--- /dev/null
++++ b/test/extract/pdfText.test.ts
+@@ -0,0 +1,49 @@
++import { describe, expect, it } from 'vitest';
++import { getPageText, getPdfPageCount, isQualityText } from '../../src/extract/pdfText.js';
++
++describe('isQualityText', () => {
++  it('rejects text under the minimum character threshold', () => {
++    expect(isQualityText('too short')).toBe(false);
++  });
++
++  it('accepts long, mostly-alphanumeric prose', () => {
++    const prose =
++      'Der Käufer kann gemäß Paragraph 437 BGB zunächst Nacherfüllung verlangen, ' +
++      'wenn die gelieferte Ware einen Sachmangel aufweist und die Gewährleistung greift.';
++    expect(isQualityText(prose)).toBe(true);
++  });
++
++  it('rejects long OCR gibberish even though it clears the character-count threshold', () => {
++    const gibberish = 'l|i1l!! O0--_x~~ '.repeat(10);
++    expect(isQualityText(gibberish)).toBe(false);
++  });
++});
++
++describe('getPdfPageCount', () => {
++  it('parses the page count from pdfinfo output', async () => {
++    const execFile = async (file: string, args: readonly string[]) => {
++      expect(file).toBe('pdfinfo');
++      expect(args).toEqual(['/tmp/doc.pdf']);
++      return { stdout: 'Title: none\nPages:          4\nEncrypted: no\n', stderr: '' };
++    };
++    await expect(getPdfPageCount('/tmp/doc.pdf', execFile)).resolves.toBe(4);
++  });
++
++  it('throws a clear error when pdfinfo output has no Pages line', async () => {
++    const execFile = async () => ({ stdout: 'garbage', stderr: '' });
++    await expect(getPdfPageCount('/tmp/doc.pdf', execFile)).rejects.toThrow(/could not determine page count/);
++  });
++});
++
++describe('getPageText', () => {
++  it('scopes pdftotext to a single page via -f/-l', async () => {
++    const calls: Array<{ file: string; args: readonly string[] }> = [];
++    const execFile = async (file: string, args: readonly string[]) => {
++      calls.push({ file, args });
++      return { stdout: 'page three text', stderr: '' };
++    };
++    const text = await getPageText('/tmp/doc.pdf', 3, execFile);
++    expect(text).toBe('page three text');
++    expect(calls).toEqual([{ file: 'pdftotext', args: ['-f', '3', '-l', '3', '/tmp/doc.pdf', '-'] }]);
++  });
++});

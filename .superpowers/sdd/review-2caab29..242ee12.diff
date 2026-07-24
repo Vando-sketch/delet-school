@@ -1,0 +1,206 @@
+# Review package: 2caab29473c333ccee255c001035709cb36540f6..feat/ocr-quality-and-subfolder-ingest-task-6
+
+## Commits
+242ee12 feat: watch subfolders of INGEST_WATCH_DIR, not just the top level
+
+## Files changed
+ eslint.config.js            |  2 +-
+ src/ingest/watcher.ts       | 35 +++++++++++++++++++++----------
+ test/ingest-watcher.test.ts | 51 +++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 76 insertions(+), 12 deletions(-)
+
+## Diff
+diff --git a/eslint.config.js b/eslint.config.js
+index 258809e..fa87bb7 100644
+--- a/eslint.config.js
++++ b/eslint.config.js
+@@ -1,17 +1,17 @@
+ // @ts-check
+ import tsParser from '@typescript-eslint/parser';
+ import tsPlugin from '@typescript-eslint/eslint-plugin';
+ 
+ export default [
+   {
+-    ignores: ['dist/**', 'node_modules/**', '.claude/**', '.worktrees/**', 'worktrees/**', '.superpowers/**'],
++    ignores: ['dist/**', 'node_modules/**', '.claude/**', '.agents/**', '.worktrees/**', 'worktrees/**', '.superpowers/**'],
+   },
+   {
+     files: ['**/*.ts'],
+     languageOptions: {
+       parser: tsParser,
+       parserOptions: {
+         project: './tsconfig.json',
+       },
+     },
+     plugins: {
+diff --git a/src/ingest/watcher.ts b/src/ingest/watcher.ts
+index 073d108..3fde49d 100644
+--- a/src/ingest/watcher.ts
++++ b/src/ingest/watcher.ts
+@@ -95,75 +95,88 @@ async function handleZip(queue: FileJobQueueLike, watchDir: string, zipPath: str
+   const stagingDir = path.join(watchDir, config.ingest.stagingDirName, randomUUID());
+   await fs.mkdir(stagingDir, { recursive: true });
+ 
+   new AdmZip(zipPath).extractAllTo(stagingDir, true);
+ 
+   const extractedFiles = await listFilesRecursive(stagingDir);
+   if (extractedFiles.length === 0) {
+     logger.warn({ zipPath }, 'Zip archive contained no files; nothing to enqueue');
+   }
+ 
++  // A zip dropped into a subfolder (e.g. watchDir/Mathe/export.zip) prefixes its own subfolder
++  // path onto every extracted file's originalFileName, same rule as a plain file dropped there
++  // directly - "." (zip was at the top level) contributes no prefix.
++  const zipRelativeDir = path.dirname(path.relative(watchDir, zipPath));
++  const namePrefix = zipRelativeDir === '.' ? '' : `${zipRelativeDir}${path.sep}`;
++
+   // Captured once upfront, before any file in the batch can be archived away by the worker -
+   // every job embeds its siblings' excerpts directly rather than reading them live off disk later.
+   const batchId = randomUUID();
+   const manifestByPath = await buildSiblingManifest(
+     extractedFiles.map((filePath) => ({ filePath, relativeName: path.relative(stagingDir, filePath) })),
+   );
+ 
+   for (const filePath of extractedFiles) {
+     const siblingManifest = boundSiblingManifest(
+       extractedFiles
+         .filter((other) => other !== filePath)
+         .map((other) => manifestByPath.get(other))
+         .filter((entry): entry is SiblingManifestEntry => entry !== undefined),
+     );
+-    await enqueueFile(queue, filePath, path.relative(stagingDir, filePath), { batchId, siblingManifest });
++    const originalFileName = `${namePrefix}${path.relative(stagingDir, filePath)}`;
++    await enqueueFile(queue, filePath, originalFileName, { batchId, siblingManifest });
+   }
+ 
+   await archiveFile(watchDir, zipPath, config.ingest.processedDirName);
+ }
+ 
+-async function handlePlainFile(queue: FileJobQueueLike, filePath: string): Promise<void> {
+-  await enqueueFile(queue, filePath, path.basename(filePath));
++async function handlePlainFile(queue: FileJobQueueLike, watchDir: string, filePath: string): Promise<void> {
++  await enqueueFile(queue, filePath, path.relative(watchDir, filePath));
+ }
+ 
+ /**
+  * Watches `watchDir` (default: a local "inbox" folder, e.g. one synced with Nextcloud) for
+  * manually-downloaded files and enqueues a processing job per file. Replaces the old
+  * Microsoft Graph webhook trigger for setups where an Azure AD app registration (and admin
+  * consent) isn't available - files are exported/downloaded by hand instead and dropped here.
+  */
+ export function createIngestWatcher(options: CreateIngestWatcherOptions = {}): FSWatcher {
+   const queue = options.queue ?? getFileJobQueue();
+   const watchDir = path.resolve(options.watchDir ?? config.ingest.watchDir);
+   mkdirSync(watchDir, { recursive: true });
+ 
+-  const ignoredDirs = [config.ingest.processedDirName, config.ingest.failedDirName, config.ingest.stagingDirName].map(
+-    (name) => path.join(watchDir, name),
+-  );
++  const ignoredNames = new Set([
++    config.ingest.processedDirName,
++    config.ingest.failedDirName,
++    config.ingest.stagingDirName,
++  ]);
+ 
+   const watcher = chokidarWatch(watchDir, {
+     ignoreInitial: false,
+-    // Top-level dot-directories (.processed/.failed/.staging) hold this watcher's own
+-    // output and must never be re-ingested.
+-    ignored: (candidate) => ignoredDirs.some((dir) => candidate === dir || candidate.startsWith(dir + path.sep)),
++    // .processed/.failed/.staging hold this watcher's own output and must never be
++    // re-ingested, wherever they occur - not just at the top level, now that subfolders are
++    // watched too. Split on /[/\\]/ rather than the OS-native path.sep alone - chokidar
++    // normalizes candidate paths to forward slashes internally regardless of host OS.
++    ignored: (candidate) => {
++      const rel = path.relative(watchDir, candidate);
++      return rel.split(/[/\\]/).some((segment) => ignoredNames.has(segment));
++    },
+     // Files land here via copy/upload/sync, which can take a moment; wait for the file
+     // size to stop changing before treating it as "added" so partial files aren't ingested.
+     awaitWriteFinish: {
+       stabilityThreshold: config.ingest.stabilityThresholdMs,
+       pollInterval: 100,
+     },
+-    depth: 0,
+   });
+ 
+   watcher.on('add', (filePath) => {
+-    void (isZipFile(filePath) ? handleZip(queue, watchDir, filePath) : handlePlainFile(queue, filePath)).catch(
++    void (isZipFile(filePath) ? handleZip(queue, watchDir, filePath) : handlePlainFile(queue, watchDir, filePath)).catch(
+       (err: unknown) => {
+         logger.error({ err, filePath }, 'Failed to ingest file');
+       },
+     );
+   });
+ 
+   watcher.on('error', (err: unknown) => {
+     logger.error({ err }, 'Ingest watcher error');
+   });
+ 
+diff --git a/test/ingest-watcher.test.ts b/test/ingest-watcher.test.ts
+index ecb50fa..4bd0829 100644
+--- a/test/ingest-watcher.test.ts
++++ b/test/ingest-watcher.test.ts
+@@ -146,11 +146,62 @@ describe('createIngestWatcher', () => {
+ 
+     const add = vi.fn().mockResolvedValue(undefined);
+     watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
+     await new Promise<void>((resolve) => watcher?.once('ready', resolve));
+ 
+     // Give the watcher a moment to (not) pick anything up from .processed.
+     await new Promise((resolve) => setTimeout(resolve, 200));
+ 
+     expect(add).not.toHaveBeenCalled();
+   });
++
++  it('enqueues a job for a file dropped into a subfolder, using its relative path as originalFileName', async () => {
++    const add = vi.fn().mockResolvedValue(undefined);
++    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
++    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
++
++    await fs.mkdir(path.join(tmpDir, 'Mathe'), { recursive: true });
++    await fs.writeFile(path.join(tmpDir, 'Mathe', 'AB1.pdf'), 'content');
++
++    await waitFor(() => add.mock.calls.length >= 1);
++
++    expect(add).toHaveBeenCalledWith(
++      'process-file',
++      expect.objectContaining({
++        filePath: path.join(tmpDir, 'Mathe', 'AB1.pdf'),
++        originalFileName: path.join('Mathe', 'AB1.pdf'),
++      }),
++    );
++  });
++
++  it('ignores a .processed directory nested under a subfolder, not just at the top level', async () => {
++    await fs.mkdir(path.join(tmpDir, 'Mathe', '.processed'), { recursive: true });
++    await fs.writeFile(path.join(tmpDir, 'Mathe', '.processed', 'old-result.pdf'), 'already handled');
++
++    const add = vi.fn().mockResolvedValue(undefined);
++    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
++    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
++
++    await new Promise((resolve) => setTimeout(resolve, 200));
++
++    expect(add).not.toHaveBeenCalled();
++  });
++
++  it('prefixes extracted zip-content originalFileName with the subfolder the zip itself was dropped into', async () => {
++    const add = vi.fn().mockResolvedValue(undefined);
++    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
++    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
++
++    await fs.mkdir(path.join(tmpDir, 'Mathe'), { recursive: true });
++    const zip = new AdmZip();
++    zip.addFile('a.txt', Buffer.from('file a'));
++    zip.addFile('b.txt', Buffer.from('file b'));
++    zip.writeZip(path.join(tmpDir, 'Mathe', 'export.zip'));
++
++    await waitFor(() => add.mock.calls.length >= 2);
++
++    const enqueuedNames = (add.mock.calls as [string, { originalFileName: string }][])
++      .map(([, data]) => data.originalFileName)
++      .sort();
++    expect(enqueuedNames).toEqual([path.join('Mathe', 'a.txt'), path.join('Mathe', 'b.txt')]);
++  });
+ });

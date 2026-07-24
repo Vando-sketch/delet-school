@@ -1,0 +1,275 @@
+# Review package: 872d4d400d692a4866375fc32c49cb27544670bd..HEAD
+
+## Commits
+b78d71d feat: add Fach enum, student config, and extraction-pipeline types
+
+## Files changed
+ .env.example        | 24 +++++++++++++++++++++---
+ src/config/index.ts | 26 ++++++++++++++++++++++++--
+ src/fach.ts         | 30 ++++++++++++++++++++++++++++++
+ src/types.ts        | 35 +++++++++++++++++++++++++++--------
+ test/config.test.ts | 39 +++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 141 insertions(+), 13 deletions(-)
+
+## Diff
+diff --git a/.env.example b/.env.example
+index c159bda..cce476b 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,33 +1,51 @@
+ # Redis (job queue)
+ REDIS_URL=redis://localhost:6379
+ 
+ # Ingest watcher - folder watched for manually-downloaded files (zips, PDFs, etc.)
+ # Point this at a Nextcloud-synced folder (e.g. one you upload exported Teams files into from
+ # your phone/browser) to get "drop a file in Nextcloud, it gets processed" with no extra step.
+ # Must be an absolute path: this is the path as seen by the worker process, whether run
+ # directly (`npm run dev:worker`) or in Docker (where it's also the in-container mount point -
+ # see INGEST_WATCH_DIR_HOST in docker-compose.yml for the host-side source of that mount).
+-INGEST_WATCH_DIR=/app/inbox
++# Default changed to __INBOX__ to avoid conflicts with Nextcloud sync patterns.
++INGEST_WATCH_DIR=/app/__INBOX__
+ # Subfolders of INGEST_WATCH_DIR that handled files are moved into - never point these outside
+ # INGEST_WATCH_DIR, and don't drop files directly into them.
+ INGEST_PROCESSED_DIRNAME=.processed
+ INGEST_FAILED_DIRNAME=.failed
+ INGEST_STAGING_DIRNAME=.staging
+ # Milliseconds a dropped file must sit unmodified before it's treated as fully written
+ # (avoids ingesting a file mid-copy/mid-upload).
+ INGEST_STABILITY_THRESHOLD_MS=2000
+ 
+ # Claude Agent SDK
+ # Optional: only needed for API-key billing. Leave unset to authenticate the Claude Agent
+ # SDK subprocess via a Claude Pro/Max subscription login instead (run `claude login` in
+ # the environment the worker runs in) - Agent SDK usage draws from subscription rate
+ # limits, not a separate credit.
+ ANTHROPIC_API_KEY=
+-# Optional: model used for task extraction. Defaults to claude-haiku-4-5-20251001 (this
+-# call is simple, high-volume extraction, not worth a larger model by default).
++# Optional: model used for task extraction. Defaults to claude-sonnet-5.
+ ANTHROPIC_MODEL=
+ 
+ # Nextcloud (same host as the worker, direct data-dir write)
+ NEXTCLOUD_DATA_DIR=/var/www/nextcloud/data
+ NEXTCLOUD_TARGET_USER=
+ NEXTCLOUD_OCC_BIN=/var/www/nextcloud/occ
++
++# Student metadata (used in the solved-PDF frontmatter)
++STUDENT_NAME=
++STUDENT_KLASSE=
++
++# PDF extraction toolchain (installed system-wide/venv in the Docker image - see docker/Dockerfile)
++PDFTOTEXT_BIN=pdftotext
++PDFTOPPM_BIN=pdftoppm
++PDFINFO_BIN=pdfinfo
++OCRMYPDF_BIN=ocrmypdf
++OCR_LANGUAGES=deu+eng
++MARKITDOWN_BIN=/app/.venv/bin/markitdown
++
++# Solution-PDF generation (pandoc + weasyprint)
++PANDOC_BIN=pandoc
++PANDOC_TEMPLATE_PATH=/app/vorlage/template.html
++PANDOC_CSS_PATH=/app/vorlage/style.css
++WEASYPRINT_BIN=/app/.venv/bin/weasyprint
+diff --git a/src/config/index.ts b/src/config/index.ts
+index ba2c08f..600c3b6 100644
+--- a/src/config/index.ts
++++ b/src/config/index.ts
+@@ -12,36 +12,58 @@ function optional(name: string, fallback: string): string {
+   return process.env[name] ?? fallback;
+ }
+ 
+ export const config = {
+   redis: {
+     url: optional('REDIS_URL', 'redis://localhost:6379'),
+   },
+   ingest: {
+     // Folder watched for manually-downloaded files (zips, PDFs, docs, etc.) - e.g. a
+     // Nextcloud-synced directory the user drops exported Teams files into by hand.
+-    watchDir: optional('INGEST_WATCH_DIR', './inbox'),
++    watchDir: optional('INGEST_WATCH_DIR', '__INBOX__'),
+     // Subfolders of watchDir that ingested files are moved into after processing, so the
+     // watcher never re-enqueues its own output. Kept inside watchDir so a single bind mount
+     // covers everything.
+     processedDirName: optional('INGEST_PROCESSED_DIRNAME', '.processed'),
+     failedDirName: optional('INGEST_FAILED_DIRNAME', '.failed'),
+     // Scratch subfolder zip contents are extracted into before being enqueued file-by-file.
+     stagingDirName: optional('INGEST_STAGING_DIRNAME', '.staging'),
+     // How long a file must sit unmodified before it's considered fully written (avoids
+     // enqueuing a partially-copied/uploaded file). Passed to chokidar's awaitWriteFinish.
+     stabilityThresholdMs: Number(optional('INGEST_STABILITY_THRESHOLD_MS', '2000')),
+   },
+   anthropic: {
+     // No fallback default: leaving ANTHROPIC_API_KEY unset is valid and expected when the
+     // Claude Agent SDK subprocess is authenticated via a Claude Pro/Max subscription login
+     // (`claude login`) instead of API billing. The SDK subprocess inherits process.env and
+     // resolves its own auth source; we don't require a key here.
+     apiKey: (): string | undefined => process.env.ANTHROPIC_API_KEY,
+-    model: optional('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001'),
++    model: optional('ANTHROPIC_MODEL', 'claude-sonnet-5'),
+   },
+   nextcloud: {
+     dataDir: () => required('NEXTCLOUD_DATA_DIR'),
+     targetUser: () => required('NEXTCLOUD_TARGET_USER'),
+     occBinary: optional('NEXTCLOUD_OCC_BIN', '/var/www/nextcloud/occ'),
+   },
++  student: {
++    name: (): string => required('STUDENT_NAME'),
++    klasse: (): string => required('STUDENT_KLASSE'),
++  },
++  poppler: {
++    pdftotextBin: optional('PDFTOTEXT_BIN', 'pdftotext'),
++    pdftoppmBin: optional('PDFTOPPM_BIN', 'pdftoppm'),
++    pdfinfoBin: optional('PDFINFO_BIN', 'pdfinfo'),
++  },
++  ocr: {
++    binary: optional('OCRMYPDF_BIN', 'ocrmypdf'),
++    languages: optional('OCR_LANGUAGES', 'deu+eng'),
++  },
++  markitdown: {
++    binary: optional('MARKITDOWN_BIN', '/app/.venv/bin/markitdown'),
++  },
++  pandoc: {
++    binary: optional('PANDOC_BIN', 'pandoc'),
++    templatePath: optional('PANDOC_TEMPLATE_PATH', '/app/vorlage/template.html'),
++    cssPath: optional('PANDOC_CSS_PATH', '/app/vorlage/style.css'),
++    weasyprintBinary: optional('WEASYPRINT_BIN', '/app/.venv/bin/weasyprint'),
++  },
+ };
+diff --git a/src/fach.ts b/src/fach.ts
+new file mode 100644
+index 0000000..1df4e13
+--- /dev/null
++++ b/src/fach.ts
+@@ -0,0 +1,30 @@
++export const FACH_KEYS = [
++  'BGWP',
++  'Englisch',
++  'Deutsch',
++  'IT',
++  'AEuP',
++  'PuG',
++  'IT-Tec',
++  'Religion',
++  '_Unsortiert',
++] as const;
++
++export type FachKey = (typeof FACH_KEYS)[number];
++
++/**
++ * Fixed, closed set - deliberately not dynamic. Guards against folder-naming drift
++ * (typos/near-duplicate folders from LLM output). Extend by hand when a new class starts;
++ * see docs/superpowers/specs/2026-07-23-pdf-solve-pipeline-design.md.
++ */
++export const FACH_SUBPATH: Record<FachKey, string> = {
++  BGWP: 'BGWP/Grünig',
++  Englisch: 'Englisch',
++  Deutsch: 'Deutsch',
++  IT: 'FU-IT',
++  AEuP: 'AEuP',
++  PuG: 'PuG',
++  'IT-Tec': 'IT-Tec',
++  Religion: 'Religion',
++  _Unsortiert: '_Unsortiert',
++};
+diff --git a/src/types.ts b/src/types.ts
+index 059f0ed..02cfb95 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -1,24 +1,43 @@
+-export interface DownloadedFile {
+-  fileName: string;
+-  mimeType: string;
+-  content: Buffer;
+-}
++import type { FachKey } from './fach.js';
+ 
+ export interface TaskSolution {
++  title: string;
+   taskDescription: string;
+   proposedSolution: string;
++  quelle?: string;
+ }
+ 
+ export interface ProcessedFileResult {
+   originalFileName: string;
++  isMaterialblatt: boolean;
++  fach: FachKey;
++  lernfeld?: string;
++  thema: string;
+   tasksFound: TaskSolution[];
+-  summaryMarkdown: string;
++}
++
++export interface VisionPage {
++  pageNumber: number;
++  imagePath: string;
++}
++
++export interface ExtractionResult {
++  markdown: string;
++  visionPages: VisionPage[];
++  ranOcr: boolean;
++  archivalPdfPath: string;
+ }
+ 
+ export interface FileProcessor {
+-  processFile(file: DownloadedFile): Promise<ProcessedFileResult>;
++  processFile(fileName: string, extraction: ExtractionResult): Promise<ProcessedFileResult>;
+ }
+ 
++export type NextcloudWriteContent = { kind: 'pdf'; bytes: Buffer } | { kind: 'material'; sourcePath: string };
++
+ export interface NextcloudWriter {
+-  writeResult(result: ProcessedFileResult, originalFile: DownloadedFile): Promise<{ writtenPath: string }>;
++  writeResult(
++    result: ProcessedFileResult,
++    content: NextcloudWriteContent,
++    datum: string,
++  ): Promise<{ writtenPath: string }>;
+ }
+diff --git a/test/config.test.ts b/test/config.test.ts
+new file mode 100644
+index 0000000..c0a8132
+--- /dev/null
++++ b/test/config.test.ts
+@@ -0,0 +1,39 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++const REQUIRED_ENV = {
++  NEXTCLOUD_DATA_DIR: '/data',
++  NEXTCLOUD_TARGET_USER: 'alice',
++  STUDENT_NAME: 'Elias Helmer',
++  STUDENT_KLASSE: 'IT10b',
++};
++
++describe('config defaults', () => {
++  const originalEnv = { ...process.env };
++
++  beforeEach(() => {
++    vi.resetModules();
++    for (const [key, value] of Object.entries(REQUIRED_ENV)) process.env[key] = value;
++    delete process.env.INGEST_WATCH_DIR;
++    delete process.env.ANTHROPIC_MODEL;
++  });
++
++  afterEach(() => {
++    process.env = { ...originalEnv };
++  });
++
++  it('defaults INGEST_WATCH_DIR to __INBOX__', async () => {
++    const { config } = await import('../src/config/index.js');
++    expect(config.ingest.watchDir).toBe('__INBOX__');
++  });
++
++  it('defaults ANTHROPIC_MODEL to claude-sonnet-5', async () => {
++    const { config } = await import('../src/config/index.js');
++    expect(config.anthropic.model).toBe('claude-sonnet-5');
++  });
++
++  it('exposes required STUDENT_NAME / STUDENT_KLASSE', async () => {
++    const { config } = await import('../src/config/index.js');
++    expect(config.student.name()).toBe('Elias Helmer');
++    expect(config.student.klasse()).toBe('IT10b');
++  });
++});

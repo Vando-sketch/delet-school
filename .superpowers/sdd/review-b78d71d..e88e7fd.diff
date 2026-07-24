@@ -1,0 +1,67 @@
+# Review package: b78d71d67e84432ff15c2dd72c49bcb1821d0a8f..HEAD
+
+## Commits
+e88e7fd feat: add pandoc-safe escaping for LLM-authored markdown content
+
+## Files changed
+ src/pdf/escape.ts       | 14 ++++++++++++++
+ test/pdf/escape.test.ts | 30 ++++++++++++++++++++++++++++++
+ 2 files changed, 44 insertions(+)
+
+## Diff
+diff --git a/src/pdf/escape.ts b/src/pdf/escape.ts
+new file mode 100644
+index 0000000..176060b
+--- /dev/null
++++ b/src/pdf/escape.ts
+@@ -0,0 +1,14 @@
++/**
++ * Neutralizes markdown/pandoc structural syntax in LLM-authored text before it's embedded
++ * into a hand-built pandoc document (fenced divs for Frage/Antwort/Quelle blocks). LLM
++ * output is not trusted to be syntactically safe for whatever it's interpolated into - same
++ * posture as sanitizeBaseName() in nextcloud/writeResult.ts for filenames. Ordinary markdown
++ * (bold, lists, balanced inline code) is left alone; only breaks the specific sequences that
++ * would corrupt the surrounding pandoc template (stray fence runs, raw HTML, unbalanced code).
++ */
++export function escapeForPandoc(text: string): string {
++  const noRawHtml = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
++  const noFenceRuns = noRawHtml.replace(/:::+/g, (run) => run.split('').join('​'));
++  const backtickCount = (noFenceRuns.match(/`/g) ?? []).length;
++  return backtickCount % 2 === 0 ? noFenceRuns : `${noFenceRuns}\``;
++}
+diff --git a/test/pdf/escape.test.ts b/test/pdf/escape.test.ts
+new file mode 100644
+index 0000000..9e17cbc
+--- /dev/null
++++ b/test/pdf/escape.test.ts
+@@ -0,0 +1,30 @@
++import { describe, expect, it } from 'vitest';
++import { escapeForPandoc } from '../../src/pdf/escape.js';
++
++describe('escapeForPandoc', () => {
++  it('leaves normal prose, bold, lists, and inline code untouched', () => {
++    const text = '**Wichtig:** siehe `§ 439 BGB`.\n- Punkt eins\n- Punkt zwei';
++    expect(escapeForPandoc(text)).toBe(text);
++  });
++
++  it('breaks a run of 3+ colons so it cannot be parsed as a pandoc fenced-div fence', () => {
++    const result = escapeForPandoc('Text mit ::: mittendrin und :::: auch');
++    expect(result).not.toMatch(/:::/);
++    // The zero-width breaks are invisible when rendered, so stripping them recovers the colons.
++    expect(result.replace(/​/g, '')).toBe('Text mit ::: mittendrin und :::: auch');
++  });
++
++  it('escapes raw HTML angle brackets so they cannot be parsed as a raw HTML block', () => {
++    expect(escapeForPandoc('Vergleiche a < b und <script>alert(1)</script>')).toBe(
++      'Vergleiche a &lt; b und &lt;script&gt;alert(1)&lt;/script&gt;',
++    );
++  });
++
++  it('appends a closing backtick when the input has an odd number of backticks', () => {
++    expect(escapeForPandoc('unbalanced `code')).toBe('unbalanced `code`');
++  });
++
++  it('does not touch already-balanced backticks', () => {
++    expect(escapeForPandoc('balanced `code` here')).toBe('balanced `code` here');
++  });
++});

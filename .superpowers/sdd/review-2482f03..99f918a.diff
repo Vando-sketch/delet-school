@@ -1,0 +1,140 @@
+# Review package: 2482f030673fcf7d1165fc5b3c36bf3b90350a84..HEAD
+
+## Commits
+99f918a docs: update README for the PDF-solve pipeline
+
+## Files changed
+ README.md | 70 ++++++++++++++++++++++++++++++++++-----------------------------
+ 1 file changed, 38 insertions(+), 32 deletions(-)
+
+## Diff
+diff --git a/README.md b/README.md
+index 8dbd06f..e01666b 100644
+--- a/README.md
++++ b/README.md
+@@ -1,87 +1,93 @@
+ # teams-task-agent
+ 
+-Watches a local folder for manually-downloaded files (e.g. a zip export of a Teams channel's
+-files, or individual PDFs/docs), uses the Claude Agent SDK to find open tasks/action items and
+-draft solutions, and writes the result into a Nextcloud instance running on the same host.
+-
+-This exists as an alternative to a Microsoft Graph webhook integration for setups where an
+-Azure AD app registration isn't available (no tenant admin rights, or admin consent for
+-`Files.Read.All`/`Sites.Read.All` denied) - files are exported/downloaded by hand from
+-Teams/SharePoint instead of pulled automatically via the Graph API.
++Watches a local `__INBOX__` folder for manually-downloaded files (e.g. a zip export of a
++Teams channel's files, or individual PDFs/docs — including scans and handwritten
++worksheets), uses the Claude Agent SDK to solve open tasks, and files a styled solution PDF
++into a per-subject Nextcloud folder tree. Automates a previously-manual workflow: read a
++dropped school PDF, solve it, file it under the right subject.
+ 
+ ```
+ You, manually: download/export files from Teams (zip, PDF, ...)
+         │
+         ▼
+-Drop into the watched folder (e.g. a Nextcloud-synced directory)
++Drop into __INBOX__ (e.g. a Nextcloud-synced directory)
+         │
+         ▼
+ Ingest watcher ── extracts zips (one job per contained file), enqueues each file
+         │
+         ▼
+ Redis queue (BullMQ)
+         │
+         ▼
+ Worker
+-        ├─ 1. Read the file from disk
+-        ├─ 2. Claude Agent SDK: find open tasks & draft solutions
+-        ├─ 3. Write result into Nextcloud's data dir + `occ files:scan`
+-        └─ 4. Archive the source file into `.processed/` (or `.failed/` on error)
++        ├─ 1. Extract text per-page: MarkItDown (text-layer) / ocrmypdf+Tesseract (scans) /
++        │      Claude vision (handwriting or still-garbled OCR)
++        ├─ 2. Claude Agent SDK: classify subject, solve every task with citations
++        ├─ 3. Render a styled solution PDF (pandoc + weasyprint) — or, for a pure
++        │      Materialblatt (no tasks), skip straight to filing the source
++        ├─ 4. Write into Nextcloud: Fächer/<Fach>/[<Lernfeld>/]<name>_Loesung_<date>.pdf
++        │      + `occ files:scan`
++        └─ 5. Archive the source (OCR'd searchable version if OCR ran) into `.processed/`
++             (or `.failed/` on error)
+ ```
+ 
+ ## Layout
+ 
+ - `src/ingest/` — watches a local folder (chokidar) for dropped files; extracts zip archives
+   and enqueues one job per contained file, or enqueues a single job for any other file directly.
+ - `src/queue/` — BullMQ queue/connection shared by the ingest watcher and worker.
+-- `src/claude/` — Claude Agent SDK integration that finds open tasks in a file and proposes
+-  solutions. The exact "what counts as a task" / output-shape logic is a placeholder default —
+-  see comments in `processFile.ts`; intended to be revisited.
+-- `src/nextcloud/` — writes the result directly into Nextcloud's data directory (no network hop,
+-  same host) and triggers `occ files:scan`.
++- `src/extract/` — per-page tiered text extraction: MarkItDown for text-layer PDFs,
++  `ocrmypdf`/Tesseract for scans, rendered page images for Claude's vision fallback on
++  handwriting or still-garbled OCR output.
++- `src/claude/` — Claude Agent SDK integration that classifies the subject (Fach) and
++  Info-/Materialblatt vs. Aufgabenblatt, and solves every task found with citations.
++- `src/pdf/` — builds the solution Markdown and renders it to a styled PDF via
++  `pandoc`+`weasyprint`.
++- `src/nextcloud/` — writes the result into Nextcloud's data directory under
++  `Fächer/<Fach>/[<Lernfeld>/]`, and triggers `occ files:scan`.
+ - `src/worker/` — wires the above together: read from disk → process → write → archive, one
+   BullMQ `Worker` consuming the queue.
+ - `docker/`, `docker-compose.yml` — containerized ingest watcher + worker + Redis, with bind
+   mounts for the watched folder and Nextcloud's data directory.
+ 
+ ## Setup
+ 
+ ```bash
+ npm install
+-cp .env.example .env   # fill in INGEST_WATCH_DIR + Nextcloud values
++cp .env.example .env   # fill in STUDENT_NAME, STUDENT_KLASSE, INGEST_WATCH_DIR + Nextcloud values
+ npm run dev:ingest     # local folder watcher
+ npm run dev:worker     # local worker
+ ```
+ 
+-Point `INGEST_WATCH_DIR` at whichever folder you'll drop downloaded files into. A convenient
+-option is a folder synced by the Nextcloud desktop/mobile client (or uploaded via Nextcloud's
+-web UI) — that way "upload a file to Nextcloud" is the entire manual step, with no separate
+-transfer to the machine running this app.
++`STUDENT_NAME` and `STUDENT_KLASSE` are required and used to personalize solution output.
++
++`INGEST_WATCH_DIR` defaults to `__INBOX__` in the root of the project directory, but can be
++pointed at any folder you'll drop downloaded files into. A convenient option is a folder synced
++by the Nextcloud desktop/mobile client (or uploaded via Nextcloud's web UI) — that way "upload
++a file to Nextcloud" is the entire manual step, with no separate transfer to the machine running
++this app.
+ 
+ To get files in: from Teams/SharePoint, use "Download" on individual files, or "Download as
+ zip" on a folder of files, then drop the result into the watched folder. Zip archives are
+ extracted automatically and every file inside is processed individually; everything else
+ (PDF, .txt, .md, ...) is processed as-is.
+ 
+ `ANTHROPIC_API_KEY` is optional: the Claude Agent SDK subprocess can instead authenticate via a
+ Claude Pro/Max subscription login (`claude login` in the worker's environment), which draws
+ from subscription rate limits rather than separate API credits. `ANTHROPIC_MODEL` is also
+ optional (defaults to Haiku, since task extraction is a simple, high-volume call).
+ 
+ ## Commands
+ 
+ - `npm run typecheck` / `npm run lint` / `npm test` — must all pass before opening a PR (see `CLAUDE.md`).
+ - `npm run build` — compiles to `dist/`.
+ 
+ ## Known open items
+ 
+-- Claude processing only handles plain-text formats (`.txt`, `.md`) today — PDFs and other
+-  binary formats are read from disk but rejected before being sent to Claude (see the TODO in
+-  `src/claude/processFile.ts`). Since the point of this workflow is manually-downloaded files,
+-  which are very often PDFs, adding text extraction for PDF (and possibly `.docx`) is the most
+-  impactful next step.
+-- Claude processing prompt/output schema for "open tasks" is a first-pass default (see
+-  `src/claude/processFile.ts`), not a finalized product decision.
++- `.docx` extraction is not wired up yet (MarkItDown supports it; the extraction module
++  already routes by file extension, so this is a small follow-up).
++- The OCR-quality gate (`isQualityText` in `src/extract/pdfText.ts`) uses a simple
++  alphanumeric-ratio heuristic; a stronger check (e.g. dictionary-based) is a reasonable
++  follow-up if it proves too permissive/strict in practice.
+ - The ingest watcher watches only the top level of `INGEST_WATCH_DIR` (no subfolders) and
+-  assumes a local/POSIX filesystem; folders synced over network filesystems or with unusual
+-  change-notification behavior may need `usePolling` added to the chokidar config.
++  assumes a local/POSIX filesystem.
