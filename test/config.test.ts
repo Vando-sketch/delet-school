@@ -58,4 +58,14 @@ describe('config defaults', () => {
     const { config } = await import('../src/config/index.js');
     expect(config.taildrop.pollIntervalMs).toBe(2000);
   });
+
+  it('provides defaults for config.agy', async () => {
+    const { config } = await import('../src/config/index.js');
+    expect(config.agy.pass1Model).toBe('gemini-3.6-flash');
+    expect(config.agy.pass1Effort).toBe('medium');
+    expect(config.agy.pass2Model).toBe('gemini-3.1-pro');
+    expect(config.agy.pass2Effort).toBe('high');
+    expect(config.agy.printTimeout).toBe('5m');
+    expect(config.agy.binary).toBe('agy');
+  });
 });
