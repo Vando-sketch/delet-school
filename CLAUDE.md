@@ -16,6 +16,8 @@ Follow this for every implementation task, without waiting to be asked:
 
 For a task large enough to naturally split into independent subtasks:
 
+Use the delegating-to-agy skill
+
 1. Create your own `<type>/<description>` branch first, as above — this is the integration branch.
 2. Split the work into subtasks and dispatch each to a subagent, picking the model per subtask's complexity (e.g. a small, mechanical change → a cheaper/faster model; a subtask requiring deep design or judgment → a stronger model).
 3. Each subagent creates its own branch off the integration branch (same `<type>/<description>` naming convention), and independently follows the full workflow above on that branch: implement, test, commit. Subagents do not open their own pull requests and do not merge — only the main agent does.
