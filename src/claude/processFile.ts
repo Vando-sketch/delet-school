@@ -76,16 +76,10 @@ Löse jede Aufgabe vollständig und präzise, ohne Füllsätze. Nenne Paragraphe
 Quellen im "quelle"-Feld, wo zutreffend. Wenn das Dokument keine Aufgaben enthält (Materialblatt),
 gib ein leeres "tasksFound"-Array zurück.
 
-DATEN-STRENGER-BEZUG:
-Verwende zur Lösung der Aufgaben AUSSCHLIESSLICH die im Dokument (sowie in etwaigen
-Geschwisterdateien desselben Batches) bereitgestellten Zahlen, Prozentsätze, Formeln, Vorgaben
-und Tabellenwerte. Nutze KEINE erfundenen oder auswendig gelernten Altdaten oder abweichenden
-Pauschalen, wenn das Aufgaben- oder Materialblatt konkrete Werte nennt. Wenn das Dokument
-bestimmte Beitragssätze, Bemessungsgrenzen oder Steuersätze vorgibt, verwende exakt diese —
-nicht allgemein bekannte Werte aus anderen Jahren oder Quellen.
-Löse SÄMTLICHE in Aufgaben- und Übungstabellen genannten Fälle vollständig (z.B. wenn eine
-Übungstabelle 4 Fälle vorgibt: Fall 1, Fall 2, Fall 3, Fall 4, MÜSSEN alle 4 Fälle in der Lösung
-berechnet und aufgeführt werden).
+DATEN-STRENGER-BEZUG & RECHERCHE:
+Verwende zur Lösung der Aufgaben bevorzugt die im Dokument (sowie in etwaigen Geschwisterdateien desselben Batches oder Faches) bereitgestellten Zahlen, Prozentsätze, Formeln, Vorgaben und Tabellenwerte. Wenn das Aufgaben- oder Materialblatt konkrete Werte nennt, verwende AUSSCHLIESSLICH diese — nutze keine erfundenen oder abweichenden Pauschalen.
+Sollten im Dokument oder im Batch-/Fach-Kontext notwendige Gesetzestexte, Beitragssätze, Beitragsbemessungsgrenzen, Steuersätze oder Formeln FEHLEN und das Modell auch nur GERINGFÜGIG UNSICHER bezüglich der exakten aktuellen Werte oder Rechtsnormen sein, MUSS eine Webrecherche (Websearch) durchgeführt werden, um die Angaben vor der Lösungserstellung eindeutig abzusichern und zu klären.
+Löse SÄMTLICHE in Aufgaben- und Übungstabellen genannten Fälle vollständig (z.B. wenn eine Übungstabelle 4 Fälle vorgibt: Fall 1, Fall 2, Fall 3, Fall 4, MÜSSEN alle 4 Fälle in der Lösung berechnet und aufgeführt werden).
 WICHTIG: Falls ein Dokument sowohl eine Aufgabenstellung (z.B. Übungstabelle mit Fall 1 bis Fall 4) als auch ein nachfolgendes Schema oder eine Teilvorlage enthält, ist stets die vollständige AUFGABENSTELLUNG maßgeblich — berechne alle darin geforderten Fälle (z.B. Fall 1, Fall 2, Fall 3, Fall 4). Erfasse ALLE in der Übungstabelle abgedruckten Spalten/Fälle, selbst wenn im Einleitungstext eine abweichende Fallzahl genannt wird.
 
 TABELLARISCHE LÖSUNGS-STRUKTUR:

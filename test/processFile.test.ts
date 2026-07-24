@@ -523,5 +523,33 @@ describe('createFileProcessor', () => {
     expect(capturedSystemPrompt).toContain('AUSSCHLIESSLICH');
     expect(capturedSystemPrompt).toContain('DATEN-STRENGER-BEZUG');
   });
+
+  it('includes websearch instruction for uncertainty clarification in the system prompt', async () => {
+    let capturedSystemPrompt: unknown;
+    let callCount = 0;
+    const fakeQuery: QueryFn = async function* (params) {
+      callCount++;
+      if (callCount === 1) {
+        capturedSystemPrompt = params.options?.systemPrompt;
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS1_OUTPUT),
+          structured_output: PASS1_OUTPUT,
+        });
+      } else {
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS2_OUTPUT),
+          structured_output: PASS2_OUTPUT,
+        });
+      }
+    };
+
+    const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: failingAgyRunner });
+    await processor.processFile('test.pdf', makeExtraction());
+
+    expect(capturedSystemPrompt).toContain('Websearch');
+    expect(capturedSystemPrompt).toContain('GERINGFÜGIG UNSICHER');
+  });
 });
 
