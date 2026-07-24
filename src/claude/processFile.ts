@@ -24,7 +24,7 @@ const logger = pino({ name: 'claude-file-processor' });
  * string, per the SDK's streaming input mode.
  */
 
-type QueryFn = (params: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }) => AsyncIterable<SDKMessage>;
+export type QueryFn = (params: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }) => AsyncIterable<SDKMessage>;
 type ReadImageFileFn = (path: string) => Promise<Buffer>;
 
 // Typed against FachKey so a rename/removal of either key in src/fach.ts fails to compile here

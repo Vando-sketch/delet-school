@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { createFileProcessor } from '../src/claude/processFile.js';
+import { createFileProcessor, type QueryFn } from '../src/claude/processFile.js';
 import type { ExtractionResult } from '../src/types.js';
 
 process.env.ANTHROPIC_API_KEY ??= 'test-api-key';
@@ -50,17 +50,20 @@ const PASS2_OUTPUT = {
   ],
 };
 
-function createDoubleFakeQuery(pass1Overrides?: any, pass2Overrides?: any) {
+function createDoubleFakeQuery(
+  pass1Overrides?: { error?: Record<string, unknown>; empty?: boolean; output?: unknown },
+  pass2Overrides?: { error?: Record<string, unknown>; empty?: boolean; output?: unknown },
+): QueryFn {
   let callCount = 0;
-  return async function* fakeQuery(params: any): AsyncGenerator<SDKMessage> {
+  const fakeQuery: QueryFn = async function* (_params) {
     callCount++;
     if (callCount === 1) {
       if (pass1Overrides?.error) {
-         yield makeResultMessage(pass1Overrides.error);
-         return;
+        yield makeResultMessage(pass1Overrides.error);
+        return;
       }
       if (pass1Overrides?.empty) return;
-      
+
       const out = pass1Overrides?.output || PASS1_OUTPUT;
       yield makeResultMessage({
         subtype: 'success',
@@ -69,11 +72,11 @@ function createDoubleFakeQuery(pass1Overrides?: any, pass2Overrides?: any) {
       });
     } else {
       if (pass2Overrides?.error) {
-         yield makeResultMessage(pass2Overrides.error);
-         return;
+        yield makeResultMessage(pass2Overrides.error);
+        return;
       }
       if (pass2Overrides?.empty) return;
-      
+
       const out = pass2Overrides?.output || PASS2_OUTPUT;
       yield makeResultMessage({
         subtype: 'success',
@@ -82,11 +85,12 @@ function createDoubleFakeQuery(pass1Overrides?: any, pass2Overrides?: any) {
       });
     }
   };
+  return fakeQuery;
 }
 
 describe('createFileProcessor', () => {
   it('returns a correctly parsed ProcessedFileResult given a well-formed SDK response', async () => {
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery() as any });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery() });
     const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
     expect(result).toEqual({
@@ -101,7 +105,7 @@ describe('createFileProcessor', () => {
   it('passes model=claude-sonnet-5 to the SDK for pass 2 by default', async () => {
     let capturedModelPass2: unknown;
     let callCount = 0;
-    async function* fakeQuery(params: { prompt: unknown; options?: { model?: string } }): AsyncGenerator<SDKMessage> {
+    const fakeQuery: QueryFn = async function* (params) {
       callCount++;
       if (callCount === 1) {
         yield makeResultMessage({
@@ -117,9 +121,9 @@ describe('createFileProcessor', () => {
           structured_output: PASS2_OUTPUT,
         });
       }
-    }
+    };
 
-    const processor = createFileProcessor({ queryFn: fakeQuery as any });
+    const processor = createFileProcessor({ queryFn: fakeQuery });
     await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
     expect(capturedModelPass2).toBe('claude-sonnet-5');
@@ -128,7 +132,7 @@ describe('createFileProcessor', () => {
   it('includes the extracted markdown in a plain string prompt when there are no vision pages', async () => {
     let capturedPrompt: unknown;
     let callCount = 0;
-    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
+    const fakeQuery: QueryFn = async function* (params) {
       callCount++;
       if (callCount === 1) {
         capturedPrompt = params.prompt;
@@ -144,9 +148,9 @@ describe('createFileProcessor', () => {
           structured_output: PASS2_OUTPUT,
         });
       }
-    }
+    };
 
-    const processor = createFileProcessor({ queryFn: fakeQuery as any });
+    const processor = createFileProcessor({ queryFn: fakeQuery });
     await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
     expect(typeof capturedPrompt).toBe('string');
@@ -156,7 +160,7 @@ describe('createFileProcessor', () => {
   it('sends an async-iterable multi-content prompt with image blocks when vision pages are present', async () => {
     let capturedPrompt: unknown;
     let callCount = 0;
-    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
+    const fakeQuery: QueryFn = async function* (params) {
       callCount++;
       if (callCount === 1) {
         capturedPrompt = params.prompt;
@@ -172,10 +176,10 @@ describe('createFileProcessor', () => {
           structured_output: PASS2_OUTPUT,
         });
       }
-    }
+    };
 
     const processor = createFileProcessor({
-      queryFn: fakeQuery as any,
+      queryFn: fakeQuery,
       readImageFile: async () => Buffer.from('fake-png-bytes'),
     });
     const extraction = makeExtraction({ visionPages: [{ pageNumber: 1, imagePath: '/tmp/page-1.png' }] });
@@ -193,24 +197,24 @@ describe('createFileProcessor', () => {
   });
 
   it('throws a clear error when the parsed JSON is missing required fields', async () => {
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: { unrelated: true } }) as any });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: { unrelated: true } }) });
     await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/isMaterialblatt/);
   });
 
   it('throws a clear error when the SDK query itself fails (non-success subtype)', async () => {
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ error: { subtype: 'error_during_execution', errors: ['model overloaded'] } }) as any });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ error: { subtype: 'error_during_execution', errors: ['model overloaded'] } }) });
     await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/Claude query failed/);
   });
 
   it('throws a clear error when the SDK yields no result message at all', async () => {
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ empty: true }) as any });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ empty: true }) });
     await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/received no result/);
   });
 
   it('includes sibling filenames and excerpts in the prompt when siblings are provided', async () => {
     let capturedPrompt: unknown;
     let callCount = 0;
-    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
+    const fakeQuery: QueryFn = async function* (params) {
       callCount++;
       if (callCount === 1) {
         capturedPrompt = params.prompt;
@@ -226,9 +230,9 @@ describe('createFileProcessor', () => {
           structured_output: PASS2_OUTPUT,
         });
       }
-    }
+    };
 
-    const processor = createFileProcessor({ queryFn: fakeQuery as any });
+    const processor = createFileProcessor({ queryFn: fakeQuery });
     await processor.processFile('arbeitsblatt1.pdf', makeExtraction(), [
       { fileName: 'lieferant-a.pdf', excerpt: 'Fachbereich IT/Elektrotechnik - Angebot Lieferant A' },
       { fileName: 'vorlage.docx', excerpt: 'Lieferant: | Lieferant: | Lieferant:' },
@@ -245,7 +249,7 @@ describe('createFileProcessor', () => {
   it('wraps each sibling excerpt in a <sibling_file> tag, mirroring the <file_content> wrapper on the primary file', async () => {
     let capturedPrompt: unknown;
     let callCount = 0;
-    async function* fakeQuery(params: { prompt: unknown }): AsyncGenerator<SDKMessage> {
+    const fakeQuery: QueryFn = async function* (params) {
       callCount++;
       if (callCount === 1) {
         capturedPrompt = params.prompt;
@@ -261,9 +265,9 @@ describe('createFileProcessor', () => {
           structured_output: PASS2_OUTPUT,
         });
       }
-    }
+    };
 
-    const processor = createFileProcessor({ queryFn: fakeQuery as any });
+    const processor = createFileProcessor({ queryFn: fakeQuery });
     await processor.processFile('arbeitsblatt1.pdf', makeExtraction(), [
       { fileName: 'lieferant-a.pdf', excerpt: 'some excerpt text' },
     ]);
@@ -277,46 +281,48 @@ describe('createFileProcessor', () => {
     let promptWithEmptyArray: unknown;
 
     let callCount1 = 0;
+    const fakeQuery1: QueryFn = async function* (params) {
+      callCount1++;
+      if (callCount1 === 1) {
+        promptWithoutArg = params.prompt;
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS1_OUTPUT),
+          structured_output: PASS1_OUTPUT,
+        });
+      } else {
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS2_OUTPUT),
+          structured_output: PASS2_OUTPUT,
+        });
+      }
+    };
     const processor1 = createFileProcessor({
-      queryFn: async function* (params) {
-        callCount1++;
-        if (callCount1 === 1) {
-          promptWithoutArg = params.prompt;
-          yield makeResultMessage({
-            subtype: 'success',
-            result: JSON.stringify(PASS1_OUTPUT),
-            structured_output: PASS1_OUTPUT,
-          });
-        } else {
-          yield makeResultMessage({
-            subtype: 'success',
-            result: JSON.stringify(PASS2_OUTPUT),
-            structured_output: PASS2_OUTPUT,
-          });
-        }
-      } as any,
+      queryFn: fakeQuery1,
     });
     await processor1.processFile('arbeitsblatt1.pdf', makeExtraction());
 
     let callCount2 = 0;
+    const fakeQuery2: QueryFn = async function* (params) {
+      callCount2++;
+      if (callCount2 === 1) {
+        promptWithEmptyArray = params.prompt;
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS1_OUTPUT),
+          structured_output: PASS1_OUTPUT,
+        });
+      } else {
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS2_OUTPUT),
+          structured_output: PASS2_OUTPUT,
+        });
+      }
+    };
     const processor2 = createFileProcessor({
-      queryFn: async function* (params) {
-        callCount2++;
-        if (callCount2 === 1) {
-          promptWithEmptyArray = params.prompt;
-          yield makeResultMessage({
-            subtype: 'success',
-            result: JSON.stringify(PASS1_OUTPUT),
-            structured_output: PASS1_OUTPUT,
-          });
-        } else {
-          yield makeResultMessage({
-            subtype: 'success',
-            result: JSON.stringify(PASS2_OUTPUT),
-            structured_output: PASS2_OUTPUT,
-          });
-        }
-      } as any,
+      queryFn: fakeQuery2,
     });
     await processor2.processFile('arbeitsblatt1.pdf', makeExtraction(), []);
 
@@ -325,7 +331,7 @@ describe('createFileProcessor', () => {
 
   it('returns isMaterialblatt=true with an empty tasksFound for reference material', async () => {
     const materialOutput = { isMaterialblatt: true, fach: 'Deutsch', thema: 'Grammatikregeln' };
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: materialOutput }) as any });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: materialOutput }) });
     const result = await processor.processFile('handout.pdf', makeExtraction());
 
     expect(result.isMaterialblatt).toBe(true);
