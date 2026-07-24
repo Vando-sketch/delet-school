@@ -48,7 +48,11 @@ rather than the primary signal):
    `Set<string>` built from German and English word lists plus a small hardcoded domain
    whitelist (see below). Passes if there is at least one token and
    `realWordCount / totalTokenCount >= 0.45`.
-3. **Alphanumeric ratio** (safety net, unchanged from today): fraction of non-whitespace
+3. **Alphanumeric ratio** (safety net, same threshold as today but broadened from a hardcoded
+   `[a-zA-Z0-9äöüÄÖÜß]` list to the Unicode `\p{L}\p{N}` classes — a deliberate correctness
+   improvement, not an oversight: it matches the tokenizer's own Unicode-letter definition
+   instead of special-casing German umlauts, at the cost of also counting non-Latin-script OCR
+   noise as "alphanumeric" for the rare page containing it): fraction of non-whitespace
    characters that are letters or digits, passes at `>= 0.6`. A page that fails the dictionary
    check (e.g. `f(x) = x^2 + 2x`, `§ 437 BGB` — few or no recognizable dictionary words) still
    passes overall if its characters are structurally healthy prose/formula text rather than
@@ -60,7 +64,7 @@ fixture (`'l|i1l!! O0--_x~~ '.repeat(10)`, from the existing `isQualityText` tes
 pattern does **not** fire on it — the symbol runs in that string are only 2-3 characters long,
 never 6+ — so that version would have wrongly classified the existing gibberish test case as
 quality text. The alphanumeric-ratio safety net does not have this problem: that same
-gibberish string is roughly 41% alphanumeric (well under the 0.6 threshold), so it's correctly
+gibberish string is roughly 47% alphanumeric (well under the 0.6 threshold), so it's correctly
 rejected by both checks, while a formula/citation-heavy page (mostly letters, digits, and a few
 symbols like `§`/`^`/`=`) clears 0.6 easily.
 
@@ -75,7 +79,7 @@ dictionaryRatioPasses(text, isRealWord):
   if tokens.length == 0: return false
   return count(isRealWord(t) for t in tokens) / tokens.length >= MIN_REAL_WORD_RATIO   # 0.45
 
-alphanumericRatioPasses(text):                      # unchanged from today's heuristic
+alphanumericRatioPasses(text):                      # same threshold, Unicode letter/digit classes
   nonWhitespace = strip whitespace from text
   alnumCount = count of Unicode letters/digits in nonWhitespace
   return alnumCount / nonWhitespace.length >= MIN_ALPHANUMERIC_RATIO                   # 0.6
