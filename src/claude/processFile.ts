@@ -73,6 +73,12 @@ Löse jede Aufgabe vollständig und präzise, ohne Füllsätze. Nenne Paragraphe
 Quellen im "quelle"-Feld, wo zutreffend. Wenn das Dokument keine Aufgaben enthält (Materialblatt),
 gib ein leeres "tasksFound"-Array zurück.
 
+HINTERGRUND-KONTEXT:
+Wenn das Dokument ein Aufgabenblatt ist:
+- Extrahiere in \`hintergrundKontext\` alle übergeordneten Fallbeispiele, Szenario-Beschreibungen, Infoblatt-Texte, Code-Listen oder allgemeinen Anweisungen, die sich vor oder zwischen den Aufgaben befinden.
+- Wiederhole den Text in \`hintergrundKontext\` NICHT, wenn er bereits Bestandteil der konkreten \`taskDescription\` einer einzelnen Aufgabe ist.
+- Wenn kein übergeordneter Dokumenten-Kontext existiert, lass \`hintergrundKontext\` weg.
+
 DATEN-STRENGER-BEZUG & RECHERCHE:
 Verwende zur Lösung der Aufgaben bevorzugt die im Dokument (sowie in etwaigen Geschwisterdateien desselben Batches oder Faches) bereitgestellten Zahlen, Prozentsätze, Formeln, Vorgaben und Tabellenwerte. Wenn das Aufgaben- oder Materialblatt konkrete Werte nennt, verwende AUSSCHLIESSLICH diese — nutze keine erfundenen oder abweichenden Pauschalen.
 Sollten im Dokument oder im Batch-/Fach-Kontext notwendige Gesetzestexte, Beitragssätze, Beitragsbemessungsgrenzen, Steuersätze oder Formeln FEHLEN und das Modell auch nur GERINGFÜGIG UNSICHER bezüglich der exakten aktuellen Werte oder Rechtsnormen sein, MUSS eine Webrecherche (Websearch) durchgeführt werden, um die Angaben vor der Lösungserstellung eindeutig abzusichern und zu klären.
@@ -107,9 +113,14 @@ const PASS1_JSON_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-const PASS2_JSON_SCHEMA = {
+export const PASS2_JSON_SCHEMA = {
   type: 'object',
   properties: {
+    hintergrundKontext: {
+      type: 'string',
+      description:
+        'Zusammenfassender Einleitungstext, Hintergrund-Szenario, Infoblatt-Teile oder allgemeine Hinweise des Dokuments, die nicht Teil einer einzelnen Aufgabe sind.',
+    },
     tasksFound: {
       type: 'array',
       description: 'Jede gefundene Aufgabe mit vollständiger Lösung. Leer bei einem Materialblatt.',
@@ -224,17 +235,32 @@ function validateShapePass1(raw: unknown, fileName: string) {
   };
 }
 
-function validateShapePass2(raw: unknown, fileName: string): TaskSolution[] {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+export function validateShapePass2(
+  raw: unknown,
+  fileName = 'unknown',
+): { tasksFound: TaskSolution[]; hintergrundKontext?: string } {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    parsed = parseModelJson(raw, fileName);
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error(`claude/processFile: Response for "${fileName}" (Pass 2) was not a JSON object.`);
   }
-  const obj = raw as Record<string, unknown>;
+  const obj = parsed as Record<string, unknown>;
 
-  if (!Array.isArray(obj.tasksFound)) {
+  const hintergrundKontext =
+    typeof obj.hintergrundKontext === 'string' && obj.hintergrundKontext.trim().length > 0
+      ? obj.hintergrundKontext.trim()
+      : undefined;
+
+  const tasksRaw = Array.isArray(obj.tasksFound) ? obj.tasksFound : Array.isArray(obj.tasks) ? obj.tasks : undefined;
+
+  if (!Array.isArray(tasksRaw)) {
     throw new Error(`claude/processFile: Response for "${fileName}" (Pass 2) is missing a "tasksFound" array.`);
   }
 
-  return obj.tasksFound.map((task, index) => {
+  const tasksFound: TaskSolution[] = tasksRaw.map((task, index) => {
     if (typeof task !== 'object' || task === null || Array.isArray(task)) {
       throw new Error(`claude/processFile: task at index ${index} for "${fileName}" is not an object.`);
     }
@@ -249,6 +275,8 @@ function validateShapePass2(raw: unknown, fileName: string): TaskSolution[] {
       ...(typeof t.quelle === 'string' ? { quelle: t.quelle } : {}),
     };
   });
+
+  return { tasksFound, ...(hintergrundKontext ? { hintergrundKontext } : {}) };
 }
 
 export interface CreateFileProcessorOptions {
@@ -372,7 +400,7 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
 
       logger.info({ fileName }, 'File contains tasks, starting Pass 2 (Solving)');
       const pass2PromptText = promptText + `\n\nHinweis aus Pass 1: Fach=${pass1Result.fach}, Thema=${pass1Result.thema}. Bitte Aufgaben lösen.`;
-      let tasksFound: TaskSolution[] | undefined;
+      let pass2Result: ReturnType<typeof validateShapePass2> | undefined;
 
       // Pass 2: Try Gemini (agy) primary path first
       try {
@@ -405,7 +433,7 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
         }
         const cleanJsonText = stripJsonFence(stdout);
         const pass2Raw = parseModelJson(cleanJsonText, fileName);
-        tasksFound = validateShapePass2(pass2Raw, fileName);
+        pass2Result = validateShapePass2(pass2Raw, fileName);
       } catch (err) {
         logger.warn(
           { fileName, err: err instanceof Error ? err.message : String(err) },
@@ -414,7 +442,7 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       }
 
       // Pass 2: Fallback to Claude Agent SDK if Gemini failed
-      if (!tasksFound) {
+      if (!pass2Result) {
         if (!config.anthropic.apiKey()) {
           logger.info('ANTHROPIC_API_KEY not set; relying on Claude Code subscription login (`claude login`)');
         }
@@ -455,10 +483,10 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
         }
 
         const pass2Raw = resultMessage2.structured_output ?? parseModelJson(resultMessage2.result, fileName);
-        tasksFound = validateShapePass2(pass2Raw, fileName);
+        pass2Result = validateShapePass2(pass2Raw, fileName);
       }
 
-      logger.info({ fileName, isMaterialblatt: false, tasksFound: tasksFound.length }, 'Solve complete');
+      logger.info({ fileName, isMaterialblatt: false, tasksFound: pass2Result.tasksFound.length }, 'Solve complete');
 
       return {
         originalFileName: fileName,
@@ -466,7 +494,8 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
         fach: pass1Result.fach,
         thema: pass1Result.thema,
         ...(pass1Result.lernfeld ? { lernfeld: pass1Result.lernfeld } : {}),
-        tasksFound,
+        ...(pass2Result.hintergrundKontext ? { hintergrundKontext: pass2Result.hintergrundKontext } : {}),
+        tasksFound: pass2Result.tasksFound,
       };
     },
   };

@@ -13,6 +13,7 @@ export interface ProcessedFileResult {
   fach: FachKey;
   lernfeld?: string;
   thema: string;
+  hintergrundKontext?: string;
   tasksFound: TaskSolution[];
 }
 

@@ -128,3 +128,20 @@ tr:nth-child(even) td {
   background-color: #fafafa;
 }
 
+/* Document background context callout */
+.hintergrund-kontext {
+  background-color: #f8f9fa;
+  border-left: 4px solid #3182ce;
+  padding: 12px 16px;
+  margin-bottom: 1.5em;
+  border-radius: 0 4px 4px 0;
+  page-break-inside: avoid;
+}
+
+.hintergrund-kontext h3 {
+  margin-top: 0;
+  color: #2b6cb0;
+  font-size: 1.1em;
+}
+
+

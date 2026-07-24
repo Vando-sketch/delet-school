@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import AdmZip from 'adm-zip';
 import type { FSWatcher } from 'chokidar';
 import { createIngestWatcher } from '../src/ingest/watcher.js';
+import { resetLocalHashCache } from '../src/ingest/dedup.js';
 
 process.env.INGEST_STABILITY_THRESHOLD_MS ??= '50';
 
@@ -23,6 +24,7 @@ describe('createIngestWatcher', () => {
   let watcher: FSWatcher | undefined;
 
   beforeEach(async () => {
+    await resetLocalHashCache();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ingest-watch-test-'));
   });
 
@@ -124,9 +126,9 @@ describe('createIngestWatcher', () => {
     // combined chars - over the 20,000 per-job budget - so at least one sibling must be dropped.
     const zip = new AdmZip();
     const fileNames = Array.from({ length: 7 }, (_, i) => `file-${i}.txt`);
-    for (const name of fileNames) {
-      zip.addFile(name, Buffer.from('a'.repeat(4000)));
-    }
+    fileNames.forEach((name, i) => {
+      zip.addFile(name, Buffer.from(`file-${i}-` + 'a'.repeat(4000)));
+    });
     const zipPath = path.join(tmpDir, 'export.zip');
     zip.writeZip(zipPath);
 
@@ -203,5 +205,45 @@ describe('createIngestWatcher', () => {
       .map(([, data]) => data.originalFileName)
       .sort();
     expect(enqueuedNames).toEqual([path.join('Mathe', 'a.txt'), path.join('Mathe', 'b.txt')]);
+  });
+
+  it('enqueues the first file normally and skips BullMQ job creation for a second duplicate file with matching SHA-256', async () => {
+    const add = vi.fn().mockResolvedValue(undefined);
+    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
+    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
+
+    const content = 'UNIQUE_CONTENT_FOR_DEDUP_TEST_123456';
+    const file1 = path.join(tmpDir, 'doc1.pdf');
+    const file2 = path.join(tmpDir, 'doc2.pdf');
+
+    await fs.writeFile(file1, content);
+
+    await waitFor(() => add.mock.calls.length >= 1);
+
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add).toHaveBeenCalledWith(
+      'process-file',
+      expect.objectContaining({ filePath: file1, originalFileName: 'doc1.pdf' }),
+    );
+
+    // Drop second identical file
+    await fs.writeFile(file2, content);
+
+    // Wait for file2 to be handled by watcher
+    await new Promise((resolve) => setTimeout(resolve, 350));
+
+    // Queue add should NOT have been called a second time
+    expect(add).toHaveBeenCalledTimes(1);
+
+    // File2 should be archived in .processed directory
+    const processedDir = path.join(tmpDir, '.processed');
+    await waitFor(async () => {
+      try {
+        const files = await fs.readdir(processedDir);
+        return files.some((f) => f.includes('doc2.pdf'));
+      } catch {
+        return false;
+      }
+    });
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { createFileProcessor, type QueryFn } from '../src/claude/processFile.js';
+import { createFileProcessor, PASS2_JSON_SCHEMA, validateShapePass2, type QueryFn } from '../src/claude/processFile.js';
 import type { ExtractionResult } from '../src/types.js';
 
 process.env.ANTHROPIC_API_KEY ??= 'test-api-key';
@@ -552,4 +552,49 @@ describe('createFileProcessor', () => {
     expect(capturedSystemPrompt).toContain('GERINGFÜGIG UNSICHER');
   });
 });
+
+describe('Pass 2 Schema and Validation for hintergrundKontext', () => {
+  it('includes hintergrundKontext in PASS2_JSON_SCHEMA properties', () => {
+    const props = (PASS2_JSON_SCHEMA as any).properties;
+    expect(props).toHaveProperty('hintergrundKontext');
+    expect(props.hintergrundKontext.type).toBe('string');
+  });
+
+  it('validates and extracts hintergrundKontext when present', () => {
+    const validJson = JSON.stringify({
+      hintergrundKontext: 'Szenario: Firma IT-Systeme AG plant ein neues Netzwerk.',
+      tasksFound: [
+        {
+          title: 'Aufgabe 1',
+          taskDescription: 'Welche Topologie?',
+          proposedSolution: 'Stern-Topologie',
+          quelle: 'Seite 1',
+        },
+      ],
+    });
+
+    const result = validateShapePass2(validJson as any);
+    expect(result.hintergrundKontext).toBe('Szenario: Firma IT-Systeme AG plant ein neues Netzwerk.');
+    expect(result.tasksFound).toHaveLength(1);
+    expect(result.tasksFound[0].title).toBe('Aufgabe 1');
+  });
+
+  it('handles missing hintergrundKontext gracefully', () => {
+    const validJson = JSON.stringify({
+      tasksFound: [
+        {
+          title: 'Aufgabe 1',
+          taskDescription: 'Frage',
+          proposedSolution: 'Antwort',
+          quelle: 'Seite 1',
+        },
+      ],
+    });
+
+    const result = validateShapePass2(validJson as any);
+    expect(result.hintergrundKontext).toBeUndefined();
+    expect(result.tasksFound).toHaveLength(1);
+  });
+});
+
 

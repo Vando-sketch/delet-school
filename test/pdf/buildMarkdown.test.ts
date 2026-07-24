@@ -102,4 +102,45 @@ describe('buildSolutionMarkdown', () => {
     expect(md).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(md).not.toContain('<script>');
   });
+
+  describe('hintergrundKontext callout', () => {
+    it('renders background context section when hintergrundKontext is present', () => {
+      const result = makeResult({
+        hintergrundKontext: 'Das Unternehmen Meyer GmbH & Co. KG plant ein neues Firmennetzwerk.',
+      });
+      const md = buildSolutionMarkdown(result, '2026-07-23');
+
+      expect(md).toContain('::: {.hintergrund-kontext}\n### Hintergrund & Kontext\n\nDas Unternehmen Meyer GmbH & Co. KG plant ein neues Firmennetzwerk.\n:::\n\n');
+    });
+
+    it('escapes special characters in hintergrundKontext via escapeForPandoc', () => {
+      const result = makeResult({
+        hintergrundKontext: 'Szenario: <script>alert("test")</script> & ::: fence',
+      });
+      const md = buildSolutionMarkdown(result, '2026-07-23');
+
+      expect(md).toContain('&lt;script&gt;alert("test")&lt;/script&gt;');
+      expect(md).not.toContain('<script>');
+      expect(md).not.toContain('::: fence');
+    });
+
+
+    it('omits background context section when hintergrundKontext is missing, empty, or whitespace', () => {
+      const resultEmpty = makeResult({ hintergrundKontext: '' });
+      const mdEmpty = buildSolutionMarkdown(resultEmpty, '2026-07-23');
+      expect(mdEmpty).not.toContain('::: {.hintergrund-kontext}');
+      expect(mdEmpty).not.toContain('Hintergrund & Kontext');
+
+      const resultSpaces = makeResult({ hintergrundKontext: '   \n  ' });
+      const mdSpaces = buildSolutionMarkdown(resultSpaces, '2026-07-23');
+      expect(mdSpaces).not.toContain('::: {.hintergrund-kontext}');
+      expect(mdSpaces).not.toContain('Hintergrund & Kontext');
+
+      const resultUndefined = makeResult({ hintergrundKontext: undefined });
+      const mdUndefined = buildSolutionMarkdown(resultUndefined, '2026-07-23');
+      expect(mdUndefined).not.toContain('::: {.hintergrund-kontext}');
+      expect(mdUndefined).not.toContain('Hintergrund & Kontext');
+    });
+  });
 });
+
