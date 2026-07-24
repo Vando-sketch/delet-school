@@ -9,3 +9,4 @@ __INBOX__/
 __LOCAL_NEXTCLOUD_TEST__/
 .worktrees/
 .agents/
+graphify-out/
