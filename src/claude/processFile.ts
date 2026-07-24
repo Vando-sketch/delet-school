@@ -159,6 +159,15 @@ async function* buildVisionPrompt(
   };
 }
 
+// One `--add-dir` per unique parent directory across all vision pages - extraction today
+// always renders every page of a job into a single shared `vision-pages` subdirectory, but
+// this doesn't assume that stays true, in case extraction ever changes to per-page dirs.
+function buildAgyAddDirArgs(visionPages: VisionPage[]): string[] {
+  const dirs = [...new Set(visionPages.map((page) => path.dirname(page.imagePath)))];
+  if (dirs.length === 0) return [];
+  return dirs.flatMap((dir) => ['--add-dir', dir]).concat(['--mode', 'plan']);
+}
+
 function parseModelJson(rawText: string, fileName: string): unknown {
   try {
     return JSON.parse(rawText);
@@ -263,15 +272,12 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
           '--print-timeout',
           config.agy.printTimeout,
         ];
-        if (extraction.visionPages.length > 0) {
-          const workDir = path.dirname(extraction.visionPages[0].imagePath);
-          agyArgs1.push('--add-dir', workDir, '--mode', 'plan');
-        }
+        agyArgs1.push(...buildAgyAddDirArgs(extraction.visionPages));
 
         const timeoutMs = parseDurationToMs(config.agy.printTimeout) + 5000;
-        const { stdout, exitCode } = await agyRunner(config.agy.binary, agyArgs1, { timeoutMs });
+        const { stdout, stderr, exitCode } = await agyRunner(config.agy.binary, agyArgs1, { timeoutMs });
         if (exitCode !== 0 || !stdout || stdout.trim() === '') {
-          throw new Error(`agy exited with code ${exitCode} or empty stdout`);
+          throw new Error(`agy exited with code ${exitCode} or empty stdout. stderr: ${stderr.slice(0, 500)}`);
         }
         const cleanJsonText = stripJsonFence(stdout);
         const pass1Raw = parseModelJson(cleanJsonText, fileName);
@@ -367,15 +373,12 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
           '--print-timeout',
           config.agy.printTimeout,
         ];
-        if (extraction.visionPages.length > 0) {
-          const workDir = path.dirname(extraction.visionPages[0].imagePath);
-          agyArgs2.push('--add-dir', workDir, '--mode', 'plan');
-        }
+        agyArgs2.push(...buildAgyAddDirArgs(extraction.visionPages));
 
         const timeoutMs = parseDurationToMs(config.agy.printTimeout) + 5000;
-        const { stdout, exitCode } = await agyRunner(config.agy.binary, agyArgs2, { timeoutMs });
+        const { stdout, stderr, exitCode } = await agyRunner(config.agy.binary, agyArgs2, { timeoutMs });
         if (exitCode !== 0 || !stdout || stdout.trim() === '') {
-          throw new Error(`agy exited with code ${exitCode} or empty stdout`);
+          throw new Error(`agy exited with code ${exitCode} or empty stdout. stderr: ${stderr.slice(0, 500)}`);
         }
         const cleanJsonText = stripJsonFence(stdout);
         const pass2Raw = parseModelJson(cleanJsonText, fileName);

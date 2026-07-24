@@ -4,7 +4,7 @@ export type AgySubprocessRunner = (
   command: string,
   args: string[],
   options?: { timeoutMs?: number }
-) => Promise<{ stdout: string; exitCode: number }>;
+) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 
 export function stripJsonFence(text: string): string {
   const trimmed = text.trim();
@@ -50,6 +50,7 @@ export const defaultSubprocessRunner: AgySubprocessRunner = (command, args, opti
     }
 
     let stdout = '';
+    let stderr = '';
     let killedByTimeout = false;
     let exited = false;
     let sigkillTimer: NodeJS.Timeout | undefined;
@@ -78,6 +79,16 @@ export const defaultSubprocessRunner: AgySubprocessRunner = (command, args, opti
       });
     }
 
+    // stderr must be drained even though we only surface it on failure - stdio is 'pipe',
+    // so an unread stderr stream fills the OS pipe buffer (~64KB) and blocks the child's
+    // write() calls indefinitely once full, hanging the call until timeoutMs regardless of
+    // how much real output was pending.
+    if (child.stderr) {
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+    }
+
     child.on('error', (err) => {
       exited = true;
       if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -90,9 +101,9 @@ export const defaultSubprocessRunner: AgySubprocessRunner = (command, args, opti
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (sigkillTimer) clearTimeout(sigkillTimer);
       if (killedByTimeout) {
-        resolve({ stdout: '', exitCode: 124 });
+        resolve({ stdout: '', stderr, exitCode: 124 });
       } else {
-        resolve({ stdout, exitCode: code ?? 1 });
+        resolve({ stdout, stderr, exitCode: code ?? 1 });
       }
     });
   });

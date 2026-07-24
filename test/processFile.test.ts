@@ -88,7 +88,7 @@ function createDoubleFakeQuery(
   return fakeQuery;
 }
 
-const failingAgyRunner = async () => ({ stdout: '', exitCode: 1 });
+const failingAgyRunner = async () => ({ stdout: '', stderr: '', exitCode: 1 });
 
 describe('createFileProcessor', () => {
   it('returns a correctly parsed ProcessedFileResult given a well-formed SDK response', async () => {
@@ -354,9 +354,9 @@ describe('createFileProcessor', () => {
       const fakeAgyRunner = async (_cmd: string, args: string[]) => {
         capturedArgs.push(args);
         if (capturedArgs.length === 1) {
-          return { stdout: JSON.stringify(PASS1_OUTPUT), exitCode: 0 };
+          return { stdout: JSON.stringify(PASS1_OUTPUT), stderr: '', exitCode: 0 };
         } else {
-          return { stdout: JSON.stringify(PASS2_OUTPUT), exitCode: 0 };
+          return { stdout: JSON.stringify(PASS2_OUTPUT), stderr: '', exitCode: 0 };
         }
       };
 
@@ -385,7 +385,7 @@ describe('createFileProcessor', () => {
     });
 
     it('falls back to Claude when agy returns a non-zero exit code', async () => {
-      const fakeAgyRunner = async () => ({ stdout: '', exitCode: 1 });
+      const fakeAgyRunner = async () => ({ stdout: '', stderr: '', exitCode: 1 });
       const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: fakeAgyRunner });
       const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
@@ -394,7 +394,16 @@ describe('createFileProcessor', () => {
     });
 
     it('falls back to Claude when agy output is malformed JSON', async () => {
-      const fakeAgyRunner = async () => ({ stdout: 'NOT VALID JSON', exitCode: 0 });
+      const fakeAgyRunner = async () => ({ stdout: 'NOT VALID JSON', stderr: '', exitCode: 0 });
+      const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: fakeAgyRunner });
+      const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
+
+      expect(result.fach).toBe('BGWP');
+      expect(result.tasksFound).toHaveLength(1);
+    });
+
+    it('falls back to Claude when agy returns syntactically valid JSON that fails shape validation', async () => {
+      const fakeAgyRunner = async () => ({ stdout: JSON.stringify({ unrelated: true }), stderr: '', exitCode: 0 });
       const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: fakeAgyRunner });
       const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
@@ -403,7 +412,7 @@ describe('createFileProcessor', () => {
     });
 
     it('throws error when both agy and Claude fail', async () => {
-      const fakeAgyRunner = async () => ({ stdout: '', exitCode: 1 });
+      const fakeAgyRunner = async () => ({ stdout: '', stderr: '', exitCode: 1 });
       const processor = createFileProcessor({
         queryFn: createDoubleFakeQuery({ error: { subtype: 'error_during_execution', errors: ['claude error'] } }),
         agyRunner: fakeAgyRunner,
@@ -417,9 +426,9 @@ describe('createFileProcessor', () => {
       const fakeAgyRunner = async (_cmd: string, args: string[]) => {
         capturedArgs.push(args);
         if (capturedArgs.length === 1) {
-          return { stdout: JSON.stringify(PASS1_OUTPUT), exitCode: 0 };
+          return { stdout: JSON.stringify(PASS1_OUTPUT), stderr: '', exitCode: 0 };
         } else {
-          return { stdout: JSON.stringify(PASS2_OUTPUT), exitCode: 0 };
+          return { stdout: JSON.stringify(PASS2_OUTPUT), stderr: '', exitCode: 0 };
         }
       };
 
