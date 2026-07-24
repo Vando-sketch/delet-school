@@ -51,6 +51,7 @@ export const defaultSubprocessRunner: AgySubprocessRunner = (command, args, opti
 
     let stdout = '';
     let killedByTimeout = false;
+    let exited = false;
     let sigkillTimer: NodeJS.Timeout | undefined;
     let timeoutTimer: NodeJS.Timeout | undefined;
 
@@ -59,8 +60,12 @@ export const defaultSubprocessRunner: AgySubprocessRunner = (command, args, opti
       timeoutTimer = setTimeout(() => {
         killedByTimeout = true;
         child.kill('SIGTERM');
+        // `child.killed` reflects whether a signal was sent, not whether the process has
+        // actually exited - it flips true immediately after `kill('SIGTERM')` above even
+        // if the child ignores the signal. Track real exit via the `close` event instead,
+        // or this SIGKILL follow-up would never fire for a SIGTERM-resistant process.
         sigkillTimer = setTimeout(() => {
-          if (!child.killed) {
+          if (!exited) {
             child.kill('SIGKILL');
           }
         }, 2000);
@@ -74,12 +79,14 @@ export const defaultSubprocessRunner: AgySubprocessRunner = (command, args, opti
     }
 
     child.on('error', (err) => {
+      exited = true;
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (sigkillTimer) clearTimeout(sigkillTimer);
       reject(err);
     });
 
     child.on('close', (code) => {
+      exited = true;
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (sigkillTimer) clearTimeout(sigkillTimer);
       if (killedByTimeout) {

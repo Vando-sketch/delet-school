@@ -66,4 +66,18 @@ describe('defaultSubprocessRunner', () => {
     expect(result.exitCode).not.toBe(0);
     expect(duration).toBeLessThan(2000);
   });
+
+  it('escalates to SIGKILL when the process ignores SIGTERM', async () => {
+    const start = Date.now();
+    const result = await defaultSubprocessRunner(
+      'node',
+      ['-e', "process.on('SIGTERM', () => {}); setTimeout(() => {}, 10000)"],
+      { timeoutMs: 200 },
+    );
+    const duration = Date.now() - start;
+    expect(result.exitCode).not.toBe(0);
+    // Grace period is 2s before SIGKILL - this must resolve soon after that, not hang
+    // for the full 10s the child would otherwise run for.
+    expect(duration).toBeLessThan(4000);
+  });
 });
