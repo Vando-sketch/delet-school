@@ -81,7 +81,12 @@ agy -p "<prompt>" --model <gemini-3.6-flash|gemini-3.1-pro> --effort <medium|hig
   file path and asking the model to view it. This is the one part of the Gemini path
   that hasn't been validated to work reliably — if it doesn't, the classified-failure
   fallback routes to Claude's proven native vision handling instead, so a shaky Gemini
-  vision path degrades gracefully rather than breaking the pipeline.
+  vision path degrades gracefully rather than breaking the pipeline. A specific risk to
+  check during that validation: in non-interactive `-p` mode, a tool-permission prompt
+  for the file-read (rather than an auto-approval under `--mode plan`) could hang the
+  call instead of erroring — if so, `AGY_PRINT_TIMEOUT` is the only backstop, and the
+  spike should confirm the timeout reliably triggers the fallback rather than leaving
+  the job stuck for the full timeout duration on every vision-fallback file.
 - Stdout is stripped of a wrapping ```` ```json ... ``` ```` fence if present, then
   handed to the same `parseModelJson`/shape-validation functions the Claude path uses.
 
@@ -119,9 +124,17 @@ No changes to `config.anthropic.*` — the Claude fallback path's config is unto
   container, then mount the resulting credential state into the worker container as a
   Docker volume (same shape as the existing `tailscale-state` volume), rather than
   attempting OAuth inside a headless container. This needs to be verified to actually
-  work (does the credential state stay valid when moved to a different machine/container,
-  does it refresh unattended, etc.) before the rest of the implementation depends on it.
-  If it doesn't pan out, this design's `agy` primary path is not viable as specified and
+  work before the rest of the implementation depends on it, specifically:
+  - **OS portability**: the credential state may be bound to macOS Keychain or other
+    host-specific paths rather than being a portable flat file — if so, it will not
+    work unmodified when mounted into the Linux-based worker container, and an
+    alternative export/import mechanism (if `agy`/Antigravity offers one) would be
+    needed instead of a raw volume mount.
+  - **Unattended token refresh**: OAuth access tokens are typically short-lived (on the
+    order of an hour); the mounted refresh token must be usable by `agy` to silently
+    re-mint an access token inside the container, with no browser or local OAuth
+    callback server available to complete an interactive re-auth.
+  If neither holds up, this design's `agy` primary path is not viable as specified and
   needs to be revisited.
 
 ## Error handling
@@ -134,6 +147,12 @@ No changes to `config.anthropic.*` — the Claude fallback path's config is unto
 - No cross-pass fallback (e.g. Pass 1 failing both providers does not affect how Pass 2
   is attempted) — Pass 2 only runs at all if Pass 1 (via whichever provider succeeded)
   returned `isMaterialblatt: false`, same as today.
+- **Process lifecycle**: on `AGY_PRINT_TIMEOUT` expiry, the `agy` child process must be
+  explicitly killed (SIGTERM, with a SIGKILL follow-up after a short grace period if it
+  doesn't exit) rather than left to run in the background after the pipeline has already
+  moved on to the fallback — otherwise a timed-out call leaks an orphaned process per
+  occurrence. The same applies on worker shutdown: in-flight `agy` child processes need
+  to be terminated, not abandoned, when the BullMQ worker stops.
 
 ## Testing
 
