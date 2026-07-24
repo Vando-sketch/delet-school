@@ -190,8 +190,11 @@ async function* buildVisionPrompt(
 // this doesn't assume that stays true, in case extraction ever changes to per-page dirs.
 function buildAgyAddDirArgs(visionPages: VisionPage[]): string[] {
   const dirs = [...new Set(visionPages.map((page) => path.dirname(page.imagePath)))];
-  if (dirs.length === 0) return [];
-  return dirs.flatMap((dir) => ['--add-dir', dir]).concat(['--mode', 'plan', '--dangerously-skip-permissions']);
+  const args = ['--dangerously-skip-permissions'];
+  if (dirs.length > 0) {
+    args.unshift(...dirs.flatMap((dir) => ['--add-dir', dir]), '--mode', 'plan');
+  }
+  return args;
 }
 
 function parseModelJson(rawText: string, fileName: string): unknown {
