@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { extname } from 'node:path';
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
@@ -22,6 +23,30 @@ export const TEXT_EXTENSIONS = new Set(['.txt', '.md']);
 // Has a real text layer already (no scans/handwriting), so it skips the OCR/vision pipeline
 // entirely and goes straight through MarkItDown, same as a text-layer PDF's markdown step.
 export const MARKITDOWN_DIRECT_EXTENSIONS = new Set(['.docx']);
+
+async function mapConcurrent<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      const item = items[currentIndex];
+      if (item !== undefined) {
+        results[currentIndex] = await fn(item, currentIndex);
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 export async function extractFile(
   filePath: string,
@@ -94,11 +119,20 @@ export async function extractFile(
   );
   const markdown = await toMarkdown(workingPdfPath);
 
-  const visionPages: VisionPage[] = [];
-  for (const pageNumber of visionPageNumbers) {
-    const imagePath = await renderPage(workingPdfPath, pageNumber, path.join(workDir, 'vision-pages'));
-    visionPages.push({ pageNumber, imagePath });
-  }
+  const envConcurrency = Number(process.env.MAX_CONCURRENT_PAGE_RENDERS);
+  const concurrency =
+    !isNaN(envConcurrency) && envConcurrency > 0
+      ? envConcurrency
+      : Math.min(4, Math.max(1, os.cpus().length));
+
+  const visionPages: VisionPage[] = await mapConcurrent(
+    visionPageNumbers,
+    concurrency,
+    async (pageNumber) => {
+      const imagePath = await renderPage(workingPdfPath, pageNumber, path.join(workDir, 'vision-pages'));
+      return { pageNumber, imagePath };
+    },
+  );
 
   return {
     markdown,

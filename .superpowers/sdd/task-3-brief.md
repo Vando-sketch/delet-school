@@ -1,49 +1,28 @@
-### Task 3: Install hunspell dictionaries in the Docker image
+# Task 3 Brief: Bounded Parallel Vision Page Rendering Queue (`src/extract/index.ts`)
 
-**Files:**
-- Modify: `docker/Dockerfile`
+**Files to modify:**
+- Modify: `src/extract/index.ts`
+- Modify: `test/extract/index.test.ts`
 
 **Interfaces:**
-- Consumes: nothing new.
-- Produces: `/usr/share/hunspell/de_DE.dic` and `/usr/share/hunspell/en_US.dic` inside the runtime image, matching `config.dictionary.deDicPath`/`.enDicPath`'s defaults from Task 1.
+- Consumes: `renderPageToPng` from `src/extract/renderPage.ts`
+- Produces: `extractFile(filePath, workDir, deps): Promise<ExtractionResult>` with bounded parallel vision page rendering queue
 
-- [ ] **Step 1: Add the apt packages**
+**Requirements:**
+1. Implement a sliding window concurrency pool helper `mapConcurrent` in `src/extract/index.ts`:
+   ```ts
+   async function mapConcurrent<T, R>(
+     items: T[],
+     concurrency: number,
+     fn: (item: T, index: number) => Promise<R>,
+   ): Promise<R[]>
+   ```
+2. Determine concurrency dynamically:
+   - Allow configuration via `process.env.MAX_CONCURRENT_PAGE_RENDERS`.
+   - Default concurrency to `Math.min(4, Math.max(1, os.cpus().length))`.
+3. Use `mapConcurrent` to render `visionPageNumbers` in parallel while preserving exact page order in the output `visionPages` array.
+4. Add unit test in `test/extract/index.test.ts`:
+   - Verify `extractFile` renders vision pages concurrently while preserving exact page array order.
 
-In `docker/Dockerfile`, in the runtime stage's `apt-get install` list, add `hunspell-de-de` and `hunspell-en-us` after `tesseract-ocr-eng`:
-
-```dockerfile
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    poppler-utils \
-    ocrmypdf \
-    tesseract-ocr \
-    tesseract-ocr-deu \
-    tesseract-ocr-eng \
-    hunspell-de-de \
-    hunspell-en-us \
-    pandoc \
-    fonts-liberation \
-    python3 \
-    python3-venv \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-```
-
-- [ ] **Step 2: Build the image**
-
-Run: `docker build -f docker/Dockerfile -t delet-school-hunspell-test .`
-Expected: build succeeds (exit code 0). This installs the full toolchain (poppler, ocrmypdf, tesseract, pandoc, the Python venv for markitdown/weasyprint) so it can take a few minutes on a cold Docker build cache.
-
-- [ ] **Step 3: Verify the dictionary files exist in the built image**
-
-Run: `docker run --rm delet-school-hunspell-test ls /usr/share/hunspell/de_DE.dic /usr/share/hunspell/en_US.dic`
-Expected: both paths printed, exit code 0 (no ENTRYPOINT/CMD is set in this Dockerfile, so the image accepts `ls ...` directly as its run command).
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add docker/Dockerfile
-git commit -m "feat: install hunspell DE/EN dictionaries in the runtime image"
-```
-
----
-
+**Verification:**
+Run `npx vitest run test/extract/index.test.ts` to ensure all tests pass.

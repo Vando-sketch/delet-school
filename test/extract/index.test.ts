@@ -179,4 +179,31 @@ describe('extractFile', () => {
     expect(result.ranOcr).toBe(true);
     expect(result.archivalPdfPath).toBe(ocrOutputPath);
   });
+
+  it('renders vision pages concurrently with mapConcurrent while preserving exact page order', async () => {
+    const filePath = path.join(tmpDir, 'multipage.pdf');
+    await fs.writeFile(filePath, 'irrelevant');
+
+    const renderedOrder: number[] = [];
+    const deps = {
+      getPdfPageCount: async () => 3,
+      getPageText: async () => 'low quality',
+      isQualityText: () => false,
+      ocrPdf: async () => undefined,
+      convertToMarkdown: async () => 'markdown',
+      renderPageToPng: async (_pdfPath: string, pageNumber: number) => {
+        renderedOrder.push(pageNumber);
+        return `/tmp/vision-page-${pageNumber}.png`;
+      },
+    };
+
+    const result = await extractFile(filePath, workDir, deps);
+
+    expect(result.visionPages).toEqual([
+      { pageNumber: 1, imagePath: '/tmp/vision-page-1.png' },
+      { pageNumber: 2, imagePath: '/tmp/vision-page-2.png' },
+      { pageNumber: 3, imagePath: '/tmp/vision-page-3.png' },
+    ]);
+    expect(renderedOrder).toHaveLength(3);
+  });
 });
