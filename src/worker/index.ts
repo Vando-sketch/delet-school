@@ -5,6 +5,7 @@ import { Worker, type Job } from 'bullmq';
 import pino from 'pino';
 import { QUEUE_NAME, getRedisConnection, type FileJobData } from '../queue/index.js';
 import { extractFile } from '../extract/index.js';
+import { checkNearDuplicate } from '../ingest/nearDup.js';
 import { createFileProcessor } from '../claude/processFile.js';
 import { buildSolutionMarkdown } from '../pdf/buildMarkdown.js';
 import { renderSolutionPdf } from '../pdf/renderPdf.js';
@@ -63,6 +64,19 @@ async function handleJob(job: Job<FileJobData>): Promise<void> {
     await fs.mkdir(workDir, { recursive: true });
     const extraction = await extractFile(filePath, workDir);
     archivalPath = extraction.archivalPdfPath;
+
+    const verdict = await checkNearDuplicate(extraction.markdown);
+
+    if (verdict.tier === 'duplicate') {
+      logger.info({ jobId: job.id, matchedFile: verdict.matchedFile, distance: verdict.distance }, 'file skipped as duplicate');
+      await archiveFile(archivalPath, config.ingest.processedDirName);
+      await removeOriginalIfArchivedElsewhere(filePath, archivalPath);
+      return;
+    }
+
+    if (verdict.tier === 'flagged') {
+      logger.warn({ jobId: job.id, matchedFile: verdict.matchedFile, distance: verdict.distance }, 'file flagged as near-duplicate');
+    }
 
     const result = await fileProcessor.processFile(originalFileName, extraction, job.data.siblingManifest);
     const datum = today();

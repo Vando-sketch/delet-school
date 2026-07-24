@@ -10,6 +10,7 @@ const rename = vi.fn();
 const rmdir = vi.fn();
 const rm = vi.fn();
 const randomUUID = vi.fn();
+const checkNearDuplicateMock = vi.fn();
 
 vi.mock('node:fs', () => ({
   promises: { mkdir, rename, rmdir, rm },
@@ -20,6 +21,7 @@ vi.mock('../src/pdf/buildMarkdown.js', () => ({ buildSolutionMarkdown }));
 vi.mock('../src/pdf/renderPdf.js', () => ({ renderSolutionPdf }));
 vi.mock('../src/claude/processFile.js', () => ({ createFileProcessor: () => ({ processFile }) }));
 vi.mock('../src/nextcloud/writeResult.js', () => ({ createNextcloudWriter: () => ({ writeResult }) }));
+vi.mock('../src/ingest/nearDup.js', () => ({ checkNearDuplicate: checkNearDuplicateMock }));
 vi.mock('../src/queue/index.js', () => ({
   QUEUE_NAME: 'teams-file-jobs',
   getRedisConnection: () => ({}),
@@ -54,6 +56,7 @@ describe('worker pipeline', () => {
     rename.mockResolvedValue(undefined);
     rmdir.mockResolvedValue(undefined);
     rm.mockResolvedValue(undefined);
+    checkNearDuplicateMock.mockResolvedValue({ tier: 'unique', distance: null, matchedFile: null });
   });
 
   it('extracts, solves, renders a PDF, writes it, and archives the raw source when OCR did not run', async () => {
@@ -233,5 +236,60 @@ describe('worker pipeline', () => {
     await handler(job);
 
     expect(processFile).toHaveBeenCalledWith('a.txt', expect.objectContaining({ markdown: '# text' }), siblingManifest);
+  });
+
+  it('continues processing when a flagged near-duplicate is detected', async () => {
+    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/arbeitsblatt1.pdf' });
+    checkNearDuplicateMock.mockResolvedValue({ tier: 'flagged', distance: 8, matchedFile: 'other.pdf' });
+    processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
+    buildSolutionMarkdown.mockReturnValue('# solution markdown');
+    renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
+    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf' });
+
+    const { createFileJobWorker } = await import('../src/worker/index.js');
+    const { Worker } = await import('bullmq');
+    createFileJobWorker();
+
+    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+    const job = { id: '1', data: { filePath: '/inbox/arbeitsblatt1.pdf', originalFileName: 'arbeitsblatt1.pdf', receivedAt: 'now' } };
+    await handler(job);
+
+    // All processing steps are called despite the flagged verdict
+    expect(processFile).toHaveBeenCalledWith('arbeitsblatt1.pdf', expect.objectContaining({ markdown: '# text' }), undefined);
+    expect(buildSolutionMarkdown).toHaveBeenCalledWith(AUFGABENBLATT_RESULT, expect.any(String));
+    expect(renderSolutionPdf).toHaveBeenCalledWith('# solution markdown');
+    expect(writeResult).toHaveBeenCalledWith(
+      AUFGABENBLATT_RESULT,
+      { kind: 'pdf', bytes: Buffer.from('%PDF fake') },
+      expect.any(String),
+    );
+  });
+
+  it('skips processing and archives when a duplicate near-duplicate is detected', async () => {
+    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/arbeitsblatt1.pdf' });
+    checkNearDuplicateMock.mockResolvedValue({ tier: 'duplicate', distance: 1, matchedFile: 'other.pdf' });
+
+    const { createFileJobWorker } = await import('../src/worker/index.js');
+    const { Worker } = await import('bullmq');
+    createFileJobWorker();
+
+    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+    const job = { id: '1', data: { filePath: '/inbox/arbeitsblatt1.pdf', originalFileName: 'arbeitsblatt1.pdf', receivedAt: 'now' } };
+    await handler(job);
+
+    // Processing steps are skipped for duplicates
+    expect(processFile).not.toHaveBeenCalled();
+    expect(buildSolutionMarkdown).not.toHaveBeenCalled();
+    expect(renderSolutionPdf).not.toHaveBeenCalled();
+    expect(writeResult).not.toHaveBeenCalled();
+
+    // File is archived to the processed directory
+    expect(rename).toHaveBeenCalledTimes(1);
+    const [movedFrom, movedTo] = rename.mock.calls[0] as [string, string];
+    expect(movedFrom).toBe('/inbox/arbeitsblatt1.pdf');
+    expect(movedTo).toMatch(/[/\\]\.processed[/\\]\d+-arbeitsblatt1\.pdf$/);
+
+    // Scratch directory is still cleaned up
+    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
   });
 });
