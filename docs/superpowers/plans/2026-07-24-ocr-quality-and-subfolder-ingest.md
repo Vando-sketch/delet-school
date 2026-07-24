@@ -33,16 +33,19 @@ src/
   ingest/
     watcher.ts            MODIFIED  depth:0 removed, segment-based ignored matching,
                                     relative-path originalFileName, uses renameOrCopy
-  worker/index.ts         MODIFIED  archiveFile uses renameOrCopy
+  worker/index.ts         MODIFIED  archiveFile uses renameOrCopy; source-dir pruning scoped
+                                    to .staging/ only (was accidentally deleting emptied
+                                    subfolders - see Task 5)
 docker/Dockerfile         MODIFIED  adds hunspell-de-de, hunspell-en-us
 .env.example               MODIFIED  documents HUNSPELL_DE_DIC_PATH/HUNSPELL_EN_DIC_PATH
 README.md                  MODIFIED  removes the two now-resolved "Known open items" bullets
 test/
   extract/
     dictionary.test.ts   NEW
-    pdfText.test.ts       MODIFIED  existing 3 cases updated + 3 new cases
+    pdfText.test.ts       MODIFIED  existing 3 cases updated + 5 new cases
   lib/
     renameOrCopy.test.ts NEW
+  worker.test.ts            MODIFIED  1 new case (subfolder source dir not pruned)
   ingest-watcher.test.ts   MODIFIED  3 new cases (subfolder file, nested ignored dir, zip-in-subfolder)
 ```
 
@@ -207,7 +210,7 @@ git commit -m "feat: add hunspell dictionary loader for the OCR-quality gate"
 
 **Interfaces:**
 - Consumes: `WordValidator`, `loadWordSet`, `buildWordValidator` from Task 1 (`src/extract/dictionary.ts`).
-- Produces: `isQualityText(text: string, isRealWord?: WordValidator): boolean`, `hasQualityAlphanumericRatio(text: string, isRealWord?: WordValidator): boolean` — same names/return type as today, with an added optional second parameter. Existing 1-argument callers (`src/extract/index.ts`'s `ExtractDeps.isQualityText`, `src/ingest/siblingManifest.ts`'s two `hasQualityAlphanumericRatio(raw)` calls) need no changes — TypeScript allows calling a function with fewer arguments than its optional-parameter signature allows.
+- Produces: `isQualityText(text: string, isRealWord?: WordValidator): boolean`, `hasQualityAlphanumericRatio(text: string, isRealWord?: WordValidator): boolean` — same names/return type as today, with an added optional second parameter. Existing 1-argument callers (`src/extract/index.ts`'s `ExtractDeps.isQualityText`, `src/ingest/siblingManifest.ts`'s two `hasQualityAlphanumericRatio(raw)` calls) need no changes — TypeScript allows calling a function with fewer arguments than its optional-parameter signature allows. Also produces `buildDefaultIsRealWord(load?: () => Set<string>): WordValidator`, exported solely so its dictionary-load-failure fallback branch is directly testable (see Step 1's new test case) without depending on whether hunspell happens to be installed on the machine running the suite.
 
 - [ ] **Step 1: Rewrite the test file**
 
@@ -216,7 +219,13 @@ Replace the full contents of `test/extract/pdfText.test.ts`:
 ```ts
 // test/extract/pdfText.test.ts
 import { describe, expect, it } from 'vitest';
-import { getPageText, getPdfPageCount, hasQualityAlphanumericRatio, isQualityText } from '../../src/extract/pdfText.js';
+import {
+  buildDefaultIsRealWord,
+  getPageText,
+  getPdfPageCount,
+  hasQualityAlphanumericRatio,
+  isQualityText,
+} from '../../src/extract/pdfText.js';
 
 describe('isQualityText', () => {
   it('rejects text under the minimum character threshold', () => {
@@ -259,6 +268,24 @@ describe('hasQualityAlphanumericRatio', () => {
     const isRealWord = (word: string) => word.length >= 2;
     expect(hasQualityAlphanumericRatio('Kaufvertrag', isRealWord)).toBe(true);
     expect(hasQualityAlphanumericRatio('', isRealWord)).toBe(false);
+  });
+});
+
+describe('buildDefaultIsRealWord', () => {
+  it('falls back to an always-true validator when the loader throws (e.g. hunspell not installed)', () => {
+    const throwingLoad = () => {
+      throw new Error('ENOENT: no such file or directory');
+    };
+    const isRealWord = buildDefaultIsRealWord(throwingLoad);
+    expect(isRealWord('anything')).toBe(true);
+    expect(isRealWord('')).toBe(true);
+  });
+
+  it('uses the loaded word set to build a real validator when the loader succeeds', () => {
+    const load = () => new Set(['kaufvertrag']);
+    const isRealWord = buildDefaultIsRealWord(load);
+    expect(isRealWord('Kaufvertrag')).toBe(true);
+    expect(isRealWord('unknownword')).toBe(false);
   });
 });
 
@@ -316,26 +343,31 @@ const MIN_ALPHANUMERIC_RATIO = 0.6;
 const TOKEN_PATTERN = /\p{L}+/gu;
 const ALPHANUMERIC_PATTERN = /[\p{L}\p{N}]/gu;
 
+/**
+ * Builds the default validator from a `loadWordSet`-shaped loader, falling back to an
+ * always-true validator if it throws (missing hunspell dictionaries - true everywhere except
+ * the production Docker image, see docker/Dockerfile). Takes `load` as a parameter (defaulting
+ * to the real `loadWordSet`) purely so tests can force the failure branch deterministically,
+ * instead of relying on hunspell happening to be absent on whatever machine runs the suite.
+ */
+export function buildDefaultIsRealWord(load: () => Set<string> = loadWordSet): WordValidator {
+  try {
+    return buildWordValidator(load());
+  } catch (err) {
+    logger.warn(
+      { err },
+      'Could not load hunspell dictionaries; OCR-quality gate falls back to the alphanumeric-ratio check only',
+    );
+    return () => true;
+  }
+}
+
 let cachedDefaultIsRealWord: WordValidator | undefined;
 
-/**
- * Lazily built so importing this module never touches the filesystem - unit tests always pass
- * their own WordValidator and never reach this path. Falls back to an always-true validator
- * when the hunspell dictionaries aren't installed (true everywhere except the production
- * Docker image - see docker/Dockerfile) so quality gating degrades to the alphanumeric-ratio
- * check alone, matching this heuristic's pre-dictionary behavior rather than crashing.
- */
+/** Lazily built so importing this module never touches the filesystem - unit tests always pass their own WordValidator and never reach this path. */
 function getDefaultIsRealWord(): WordValidator {
   if (!cachedDefaultIsRealWord) {
-    try {
-      cachedDefaultIsRealWord = buildWordValidator(loadWordSet());
-    } catch (err) {
-      logger.warn(
-        { err },
-        'Could not load hunspell dictionaries; OCR-quality gate falls back to the alphanumeric-ratio check only',
-      );
-      cachedDefaultIsRealWord = () => true;
-    }
+    cachedDefaultIsRealWord = buildDefaultIsRealWord();
   }
   return cachedDefaultIsRealWord;
 }
@@ -347,7 +379,10 @@ function tokenize(text: string): string[] {
 function dictionaryRatioPasses(text: string, isRealWord: WordValidator): boolean {
   const tokens = tokenize(text);
   if (tokens.length === 0) return false;
-  const realWordCount = tokens.filter((token) => isRealWord(token)).length;
+  // Lowercased here (not left to each WordValidator) so the ratio check has one, consistent
+  // casing contract regardless of which validator is injected - buildWordValidator's own
+  // lowercasing is a second, harmless layer for direct callers, not the source of truth.
+  const realWordCount = tokens.filter((token) => isRealWord(token.toLowerCase())).length;
   return realWordCount / tokens.length >= MIN_REAL_WORD_RATIO;
 }
 
@@ -416,7 +451,7 @@ export async function getPageText(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npm test -- test/extract/pdfText.test.ts`
-Expected: PASS, all 9 tests green.
+Expected: PASS, all 11 tests green.
 
 - [ ] **Step 5: Run the full suite to confirm no regressions in callers**
 
@@ -623,10 +658,13 @@ git commit -m "feat: add EXDEV-safe rename-or-copy helper for cross-filesystem a
 **Files:**
 - Modify: `src/ingest/watcher.ts:78-84` (`archiveFile`)
 - Modify: `src/worker/index.ts:24-35` (`archiveFile`)
+- Modify: `test/worker.test.ts` (1 new case)
 
 **Interfaces:**
 - Consumes: `renameOrCopy` from Task 4 (`src/lib/renameOrCopy.ts`).
-- Produces: no interface change — both `archiveFile` functions keep their existing signatures; this task only swaps their internal `fs.rename` call for `renameOrCopy`.
+- Produces: `watcher.ts`'s `archiveFile` keeps its existing signature and behavior unchanged
+  (pure refactor). `worker/index.ts`'s `archiveFile` keeps its signature but its
+  source-directory-cleanup condition is corrected, not just refactored — see Step 2's note.
 
 - [ ] **Step 1: Update `src/ingest/watcher.ts`**
 
@@ -666,28 +704,75 @@ async function archiveFile(filePath: string, dirName: string): Promise<void> {
   const dest = path.join(destDir, `${Date.now()}-${path.basename(filePath)}`);
   await renameOrCopy(filePath, dest);
 
+  // Only prune the source directory when it's a job-scratch or zip-extraction staging
+  // directory under .staging/ - never a real subfolder of watchDir a file was dropped into
+  // directly. Before subfolder support, `sourceDir !== watchDir` was an adequate proxy for
+  // "this is a staging dir" (the only non-watchDir source a file could ever have). That stops
+  // being true once subfolders are watched: a plain file at watchDir/Mathe/AB1.pdf has
+  // sourceDir = watchDir/Mathe, which is not a staging dir and must be left in place even once
+  // empty (see docs/superpowers/specs/2026-07-24-ocr-quality-and-subfolder-ingest-design.md,
+  // "Explicitly out of scope: empty subfolder cleanup").
+  const stagingRoot = path.join(watchDir, config.ingest.stagingDirName);
   const sourceDir = path.dirname(filePath);
-  if (sourceDir !== watchDir) {
+  if (sourceDir === stagingRoot || sourceDir.startsWith(stagingRoot + path.sep)) {
     await fs.rmdir(sourceDir).catch(() => undefined);
   }
 }
 ```
 
-- [ ] **Step 3: Run the full test suite to confirm this refactor is behavior-preserving**
+- [ ] **Step 3: Add a regression test for the corrected pruning condition**
+
+Add to `test/worker.test.ts`, inside the `describe('worker pipeline', ...)` block, after the `'cleans up a zip-extraction staging directory after archiving the file it contained'` test:
+
+```ts
+  it('does not prune a subfolder a file was dropped into directly - only .staging dirs get pruned', async () => {
+    extractFile.mockResolvedValue({
+      markdown: '# text',
+      visionPages: [],
+      ranOcr: false,
+      archivalPdfPath: '/inbox/Mathe/AB1.pdf',
+    });
+    processFile.mockResolvedValue({ ...AUFGABENBLATT_RESULT, originalFileName: 'Mathe/AB1.pdf' });
+    buildSolutionMarkdown.mockReturnValue('# solution markdown');
+    renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
+    writeResult.mockResolvedValue({ writtenPath: '/data/x.pdf' });
+
+    const { createFileJobWorker } = await import('../src/worker/index.js');
+    const { Worker } = await import('bullmq');
+    createFileJobWorker();
+
+    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+    const job = { id: '1', data: { filePath: '/inbox/Mathe/AB1.pdf', originalFileName: 'Mathe/AB1.pdf', receivedAt: 'now' } };
+    await handler(job);
+
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(rmdir).not.toHaveBeenCalled();
+  });
+```
+
+- [ ] **Step 4: Run the full test suite**
 
 Run: `npm test`
-Expected: all tests pass unchanged, in particular `test/worker.test.ts` (its `vi.mock('node:fs', ...)` intercepts `renameOrCopy`'s internal default `fs.rename` too, since both modules resolve the same mocked `node:fs` — so the existing `expect(rename).toHaveBeenCalledWith(...)` assertions there keep working with no test changes) and `test/ingest-watcher.test.ts` (uses real files, unaffected by the internal refactor).
+Expected: all tests pass, including the new case and every pre-existing `test/worker.test.ts` case
+unchanged (`rmdir` is still called with the same staging-dir paths as before for the OCR'd-PDF
+and zip-extraction cases — both `/inbox/.staging/job-abc123` and `/inbox/.staging/uuid-1` match
+the new `stagingRoot`-prefix condition exactly as they matched the old `sourceDir !== watchDir`
+condition) and `test/ingest-watcher.test.ts` (uses real files, unaffected by the internal
+`renameOrCopy` refactor — `vi.mock('node:fs', ...)` in `test/worker.test.ts` intercepts
+`renameOrCopy`'s internal default `fs.rename` too, since both modules resolve the same mocked
+`node:fs`, so the existing `expect(rename).toHaveBeenCalledWith(...)` assertions keep working
+unchanged).
 
-- [ ] **Step 4: Typecheck and lint**
+- [ ] **Step 5: Typecheck and lint**
 
 Run: `npm run typecheck && npm run lint`
 Expected: both exit 0.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/ingest/watcher.ts src/worker/index.ts
-git commit -m "refactor: archive files via the EXDEV-safe renameOrCopy helper"
+git add src/ingest/watcher.ts src/worker/index.ts test/worker.test.ts
+git commit -m "fix: archive via renameOrCopy, and only prune staging dirs (not subfolders)"
 ```
 
 ---
@@ -801,10 +886,11 @@ with:
     ignoreInitial: false,
     // .processed/.failed/.staging hold this watcher's own output and must never be
     // re-ingested, wherever they occur - not just at the top level, now that subfolders are
-    // watched too.
+    // watched too. Split on /[/\\]/ rather than the OS-native path.sep alone - chokidar
+    // normalizes candidate paths to forward slashes internally regardless of host OS.
     ignored: (candidate) => {
       const rel = path.relative(watchDir, candidate);
-      return rel.split(path.sep).some((segment) => ignoredNames.has(segment));
+      return rel.split(/[/\\]/).some((segment) => ignoredNames.has(segment));
     },
     // Files land here via copy/upload/sync, which can take a moment; wait for the file
     // size to stop changing before treating it as "added" so partial files aren't ingested.
