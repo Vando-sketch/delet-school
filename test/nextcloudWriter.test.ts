@@ -96,6 +96,16 @@ describe('createNextcloudWriter().writeResult', () => {
     expect(writtenPath).not.toContain('..');
   });
 
+  it('strips directory paths and redundant subject/zip prefixes from originalFileName', async () => {
+    const client = makeFakeClient();
+    const writer = createNextcloudWriter({ webdavClient: client });
+    const result = makeResult({ fach: 'AEuP', originalFileName: 'AEuP_Kislik/AEuP_Kislik_01_Algorithmus.pdf' });
+
+    const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
+
+    expect(writtenPath).toBe('/Fächer/AEuP/01_Algorithmus_Loesung_2026-07-23.pdf');
+  });
+
   it('only calls createDirectory once across multiple writes to the same Fach directory', async () => {
     const client = makeFakeClient();
     const writer = createNextcloudWriter({ webdavClient: client });

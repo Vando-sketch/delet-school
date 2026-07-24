@@ -7,6 +7,7 @@ const mockRedisSet = new Set<string>();
 let redisShouldFail = false;
 
 const mockRedis = {
+  status: 'ready',
   sismember: vi.fn().mockImplementation(async (key: string, member: string) => {
     if (redisShouldFail) {
       throw new Error('Redis connection failed');
@@ -18,6 +19,13 @@ const mockRedis = {
       throw new Error('Redis connection failed');
     }
     mockRedisSet.add(member);
+    return 1;
+  }),
+  del: vi.fn().mockImplementation(async (key: string) => {
+    if (redisShouldFail) {
+      throw new Error('Redis connection failed');
+    }
+    mockRedisSet.clear();
     return 1;
   }),
 };
