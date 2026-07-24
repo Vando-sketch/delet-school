@@ -35,41 +35,33 @@ export function computeFileHash(filePath: string): Promise<string> {
 }
 
 /**
- * Checks if a file SHA-256 hash has already been processed.
- * Checks the local memory set first, then queries the Redis set.
- * On Redis error, falls back to the local memory set result.
+ * Atomically checks whether a file SHA-256 hash has already been processed and, if not,
+ * claims it. Returns true if this call is the first to see the hash (not a duplicate);
+ * false if it was already claimed - by this process or, via Redis, by another worker.
+ *
+ * The local check-and-add happens synchronously (no `await` between them), so two
+ * overlapping calls for the same hash within one process can't both observe "unseen"
+ * before either claims it - unlike a separate isHashSeen()-then-recordHash() pair, which
+ * lets exactly that interleaving happen whenever two identical files land in the same
+ * tick (e.g. a batch drop). Redis SADD's return value (0 = already a member) extends the
+ * same atomicity across worker processes.
  */
-export async function isHashSeen(hash: string): Promise<boolean> {
+export async function claimHash(hash: string): Promise<boolean> {
   if (localHashMemorySet.has(hash)) {
-    return true;
+    return false;
   }
+  localHashMemorySet.add(hash);
+
   try {
     const redis = getRedisConnection();
     if (redis.status === 'ready') {
-      const isMember = await redis.sismember(REDIS_HASH_SET_KEY, hash);
-      if (isMember === 1) {
-        localHashMemorySet.add(hash);
-        return true;
+      const added = await redis.sadd(REDIS_HASH_SET_KEY, hash);
+      if (added === 0) {
+        return false;
       }
     }
   } catch (_err) {
-    // Fallback to local memory set if Redis is unavailable or errors
+    // Redis unavailable - the local claim above is the fallback source of truth.
   }
-  return localHashMemorySet.has(hash);
-}
-
-/**
- * Records a file SHA-256 hash as processed in both local memory set and Redis set.
- * On Redis error, logs or catches the error and retains local memory set entry.
- */
-export async function recordHash(hash: string): Promise<void> {
-  localHashMemorySet.add(hash);
-  try {
-    const redis = getRedisConnection();
-    if (redis.status === 'ready') {
-      await redis.sadd(REDIS_HASH_SET_KEY, hash);
-    }
-  } catch (_err) {
-    // Fallback if Redis is unavailable or errors
-  }
+  return true;
 }
