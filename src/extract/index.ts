@@ -1,7 +1,7 @@
 import { extname } from 'node:path';
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { getPageText, getPdfPageCount, isQualityText } from './pdfText.js';
+import { getPageText, getPdfPageCount, getPagesWithContentImages, isQualityText } from './pdfText.js';
 import { ocrPdf } from './ocr.js';
 import { convertToMarkdown } from './markitdown.js';
 import { renderPageToPng } from './renderPage.js';
@@ -14,6 +14,7 @@ export interface ExtractDeps {
   ocrPdf?: typeof ocrPdf;
   convertToMarkdown?: typeof convertToMarkdown;
   renderPageToPng?: typeof renderPageToPng;
+  getPagesWithContentImages?: typeof getPagesWithContentImages;
 }
 
 export const TEXT_EXTENSIONS = new Set(['.txt', '.md']);
@@ -32,6 +33,7 @@ export async function extractFile(
   const runOcr = deps.ocrPdf ?? ocrPdf;
   const toMarkdown = deps.convertToMarkdown ?? convertToMarkdown;
   const renderPage = deps.renderPageToPng ?? renderPageToPng;
+  const getPagesWithImages = deps.getPagesWithContentImages ?? getPagesWithContentImages;
 
   const ext = extname(filePath).toLowerCase();
 
@@ -61,7 +63,15 @@ export async function extractFile(
   const pageNumbers = Array.from({ length: pageCount }, (_, i) => i + 1);
 
   const originalTexts = await Promise.all(pageNumbers.map((page) => getText(filePath, page)));
-  const needsOcr = originalTexts.some((text) => !checkQuality(text));
+  const pagesWithImages = await getPagesWithImages(filePath).catch(() => new Set<number>());
+
+  const pageNeedsOcr = (i: number) => {
+    const text = originalTexts[i] ?? '';
+    const hasContentImage = pagesWithImages.has(i + 1);
+    return hasContentImage || !checkQuality(text);
+  };
+
+  const needsOcr = pageNumbers.some((_, i) => pageNeedsOcr(i));
 
   let workingPdfPath = filePath;
   let ranOcr = false;
@@ -75,7 +85,9 @@ export async function extractFile(
     pageTexts = await Promise.all(pageNumbers.map((page) => getText(ocrOutputPath, page)));
   }
 
-  const visionPageNumbers = pageNumbers.filter((_, i) => !checkQuality(pageTexts[i] ?? ''));
+  const visionPageNumbers = pageNumbers.filter(
+    (page, i) => pagesWithImages.has(page) || !checkQuality(pageTexts[i] ?? ''),
+  );
   const markdown = await toMarkdown(workingPdfPath);
 
   const visionPages: VisionPage[] = [];

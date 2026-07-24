@@ -68,6 +68,7 @@ export const config = {
     pdftotextBin: optional('PDFTOTEXT_BIN', 'pdftotext'),
     pdftoppmBin: optional('PDFTOPPM_BIN', 'pdftoppm'),
     pdfinfoBin: optional('PDFINFO_BIN', 'pdfinfo'),
+    pdfimagesBin: optional('PDFIMAGES_BIN', 'pdfimages'),
   },
   ocr: {
     binary: optional('OCRMYPDF_BIN', 'ocrmypdf'),

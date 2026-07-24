@@ -83,10 +83,14 @@ und Tabellenwerte. Nutze KEINE erfundenen oder auswendig gelernten Altdaten oder
 Pauschalen, wenn das Aufgaben- oder Materialblatt konkrete Werte nennt. Wenn das Dokument
 bestimmte Beitragssätze, Bemessungsgrenzen oder Steuersätze vorgibt, verwende exakt diese —
 nicht allgemein bekannte Werte aus anderen Jahren oder Quellen.
+Löse SÄMTLICHE in Aufgaben- und Übungstabellen genannten Fälle vollständig (z.B. wenn eine
+Übungstabelle 4 Fälle vorgibt: Fall 1, Fall 2, Fall 3, Fall 4, MÜSSEN alle 4 Fälle in der Lösung
+berechnet und aufgeführt werden).
+WICHTIG: Falls ein Dokument sowohl eine Aufgabenstellung (z.B. Übungstabelle mit Fall 1 bis Fall 4) als auch ein nachfolgendes Schema oder eine Teilvorlage enthält, ist stets die vollständige AUFGABENSTELLUNG maßgeblich — berechne alle darin geforderten Fälle (z.B. Fall 1, Fall 2, Fall 3, Fall 4). Erfasse ALLE in der Übungstabelle abgedruckten Spalten/Fälle, selbst wenn im Einleitungstext eine abweichende Fallzahl genannt wird.
 
 TABELLARISCHE LÖSUNGS-STRUKTUR:
 Wenn eine Aufgabe 3 oder mehr vergleichbare Fälle, Datensätze oder Zeilen enthält (z.B. Fall 1,
-Fall 2, Fall 3; ein Lieferantenvergleich über mehere Anbieter; eine Lohnabrechnung für mehere
+Fall 2, Fall 3, Fall 4; ein Lieferantenvergleich über mehrere Anbieter; eine Lohnabrechnung für mehrere
 Mitarbeiter), MUSS die "proposedSolution" als übersichtliche Markdown-Tabelle aufgebaut sein.
 Einfache Berechnungen mit nur 1-2 Schritten bleiben als Fließtext.
 
@@ -187,7 +191,7 @@ async function* buildVisionPrompt(
 function buildAgyAddDirArgs(visionPages: VisionPage[]): string[] {
   const dirs = [...new Set(visionPages.map((page) => path.dirname(page.imagePath)))];
   if (dirs.length === 0) return [];
-  return dirs.flatMap((dir) => ['--add-dir', dir]).concat(['--mode', 'plan']);
+  return dirs.flatMap((dir) => ['--add-dir', dir]).concat(['--mode', 'plan', '--dangerously-skip-permissions']);
 }
 
 function parseModelJson(rawText: string, fileName: string): unknown {
