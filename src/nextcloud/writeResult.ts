@@ -38,10 +38,17 @@ function deriveTargetDir(result: ProcessedFileResult): string[] {
 }
 
 function deriveFileName(result: ProcessedFileResult, content: NextcloudWriteContent, datum: string): string {
-  const safeBase = sanitizePathSegment(result.originalFileName);
-  const ext = path.extname(safeBase);
-  const stem = ext.length > 0 ? safeBase.slice(0, -ext.length) : safeBase;
-  const finalStem = stem.length > 0 ? stem : 'untitled';
+  const base = path.basename(result.originalFileName);
+  const ext = path.extname(base);
+  let stem = ext.length > 0 ? base.slice(0, -ext.length) : base;
+
+  // Strip redundant leading subject / zip prefixes (e.g. AEuP_Kislik_, AEuP_, IT_Tec_, etc.)
+  // since output files are already stored under the subject folder structure (Fächer/AEuP/...).
+  stem = stem.replace(/^(?:AEuP|IT-Tec|IT|BGWP|Mathe|Deutsch|Englisch)_(?:Kislik_)?/i, '');
+  stem = stem.replace(/^AEuP_Kislik_/i, '');
+
+  const safeStem = sanitizePathSegment(stem);
+  const finalStem = safeStem.length > 0 ? safeStem : 'untitled';
 
   if (content.kind === 'pdf') {
     return `${finalStem}_Loesung_${datum}.pdf`;
