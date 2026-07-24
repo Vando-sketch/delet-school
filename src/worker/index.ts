@@ -11,6 +11,7 @@ import { renderSolutionPdf } from '../pdf/renderPdf.js';
 import { createNextcloudWriter } from '../nextcloud/writeResult.js';
 import { config } from '../config/index.js';
 import type { NextcloudWriteContent } from '../types.js';
+import { renameOrCopy } from '../lib/renameOrCopy.js';
 
 const logger = pino({ name: 'worker' });
 
@@ -26,10 +27,19 @@ async function archiveFile(filePath: string, dirName: string): Promise<void> {
   const destDir = path.join(watchDir, dirName);
   await fs.mkdir(destDir, { recursive: true });
   const dest = path.join(destDir, `${Date.now()}-${path.basename(filePath)}`);
-  await fs.rename(filePath, dest);
+  await renameOrCopy(filePath, dest);
 
+  // Only prune the source directory when it's a job-scratch or zip-extraction staging
+  // directory under .staging/ - never a real subfolder of watchDir a file was dropped into
+  // directly. Before subfolder support, `sourceDir !== watchDir` was an adequate proxy for
+  // "this is a staging dir" (the only non-watchDir source a file could ever have). That stops
+  // being true once subfolders are watched: a plain file at watchDir/Mathe/AB1.pdf has
+  // sourceDir = watchDir/Mathe, which is not a staging dir and must be left in place even once
+  // empty (see docs/superpowers/specs/2026-07-24-ocr-quality-and-subfolder-ingest-design.md,
+  // "Explicitly out of scope: empty subfolder cleanup").
+  const stagingRoot = path.join(watchDir, config.ingest.stagingDirName);
   const sourceDir = path.dirname(filePath);
-  if (sourceDir !== watchDir) {
+  if (sourceDir === stagingRoot || sourceDir.startsWith(stagingRoot + path.sep)) {
     await fs.rmdir(sourceDir).catch(() => undefined);
   }
 }
