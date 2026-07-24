@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-deu \
     tesseract-ocr-eng \
+    hunspell-de-de \
+    hunspell-en-us \
     pandoc \
     fonts-liberation \
     python3 \
