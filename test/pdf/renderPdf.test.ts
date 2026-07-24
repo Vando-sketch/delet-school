@@ -34,11 +34,11 @@ describe('renderSolutionPdf', () => {
     expect(call?.args).toEqual([
       writeCalls[0]?.path,
       '--template',
-      '/app/vorlage/template.html',
+      './docker/vorlage/template.html',
       '--css',
-      '/app/vorlage/style.css',
+      './docker/vorlage/style.css',
       '--pdf-engine',
-      '/app/.venv/bin/weasyprint',
+      './.venv/bin/weasyprint',
       '-o',
       expect.stringMatching(/\.pdf$/),
     ]);

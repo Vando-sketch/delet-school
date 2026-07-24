@@ -9,3 +9,4 @@ __LOCAL_NEXTCLOUD_TEST__/
 .worktrees/
 .agents/
 graphify-out/
+dump.rdb

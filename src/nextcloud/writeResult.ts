@@ -57,12 +57,15 @@ function deriveFileName(result: ProcessedFileResult, content: NextcloudWriteCont
  * into a Fach folder that's already been confirmed to exist earlier in the same process.
  */
 export function createNextcloudWriter(deps: NextcloudWriterDeps = {}): NextcloudWriter {
-  const client: NextcloudWebDAVClient =
+  const baseUrl = config.nextcloud.baseUrl();
+  const client: NextcloudWebDAVClient | null =
     deps.webdavClient ??
-    createClient(`${config.nextcloud.baseUrl()}/remote.php/dav/files/${config.nextcloud.username()}`, {
-      username: config.nextcloud.username(),
-      password: config.nextcloud.appPassword(),
-    });
+    (baseUrl
+      ? createClient(`${baseUrl}/remote.php/dav/files/${config.nextcloud.username()}`, {
+          username: config.nextcloud.username(),
+          password: config.nextcloud.appPassword(),
+        })
+      : null);
   const knownDirs = new Set<string>();
 
   return {
@@ -72,15 +75,23 @@ export function createNextcloudWriter(deps: NextcloudWriterDeps = {}): Nextcloud
       const fileName = deriveFileName(result, content, datum);
       const writtenPath = `${targetDir}/${fileName}`;
 
-      if (!knownDirs.has(targetDir)) {
-        await client.createDirectory(targetDir, { recursive: true });
-        knownDirs.add(targetDir);
-      }
+      if (client) {
+        if (!knownDirs.has(targetDir)) {
+          await client.createDirectory(targetDir, { recursive: true });
+          knownDirs.add(targetDir);
+        }
 
-      const bytes = content.kind === 'pdf' ? content.bytes : await fs.readFile(content.sourcePath);
-      const ok = await client.putFileContents(writtenPath, bytes);
-      if (ok === false) {
-        throw new Error(`nextcloud/writeResult: failed to upload "${writtenPath}" via WebDAV`);
+        const bytes = content.kind === 'pdf' ? content.bytes : await fs.readFile(content.sourcePath);
+        const ok = await client.putFileContents(writtenPath, bytes);
+        if (ok === false) {
+          throw new Error(`nextcloud/writeResult: failed to upload "${writtenPath}" via WebDAV`);
+        }
+      } else {
+        const localDir = path.resolve(config.nextcloud.outboxDir, ...dirParts);
+        await fs.mkdir(localDir, { recursive: true });
+        const localFilePath = path.join(localDir, fileName);
+        const bytes = content.kind === 'pdf' ? content.bytes : await fs.readFile(content.sourcePath);
+        await fs.writeFile(localFilePath, bytes);
       }
 
       return { writtenPath };

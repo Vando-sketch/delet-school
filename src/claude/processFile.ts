@@ -34,6 +34,7 @@ type ReadImageFileFn = (path: string) => Promise<Buffer>;
 // exists.
 const IT_KEY: FachKey = 'IT';
 const IT_TEC_KEY: FachKey = 'IT-Tec';
+const AEUP_KEY: FachKey = 'AEuP';
 
 const SYSTEM_PROMPT = `Du bist ein Assistent, der Schulunterlagen liest, Aufgaben löst und Materialblätter erkennt.
 
@@ -51,12 +52,8 @@ Fach-Klassifizierung über den Batch hinweg konsistent zu halten: Wenn eine Batc
 explizites Signal für das Fach enthält (z.B. eine wörtlich identische Kopfzeile oder einen
 Fachbereich-Hinweis) und die aktuelle Datei dasselbe Signal teilt oder selbst kein eindeutiges
 Signal hat, klassifiziere konsistent mit dem restlichen Batch statt unabhängig zu raten. Das gilt
-mit besonderer Strenge für die leicht verwechselten Schlüssel "${IT_KEY}" und "${IT_TEC_KEY}"
-(historisch häufig fälschlich uneinheitlich vergeben): sie bleiben zwei getrennte, eigenständige Fächer -
-nicht zusammenlegen -, aber wenn mehrere Dateien im selben Batch dieselbe wörtliche
-Kopfzeile/denselben Fachbereich-Hinweis (z.B. "Fachbereich IT/Elektrotechnik") teilen, MÜSSEN sie
-alle denselben Fach-Schlüssel erhalten. Das ist eine harte Regel, keine Kann-Empfehlung: lass
-niemals zwei Dateien mit wörtlich identischem Kopfzeilentext in unterschiedlichen Fächern landen.
+mit besonderer Strenge für die leicht verwechselten Schlüssel "${IT_KEY}", "${IT_TEC_KEY}" und "${AEUP_KEY}"
+(historisch häufig fälschlich uneinheitlich vergeben): wenn mehrere Dateien im selben Batch gemeinsam verarbeitet werden, MÜSSEN sie alle denselben Fach-Schlüssel erhalten. Es ist eine harte Regel: lass niemals zwei Dateien aus demselben Export-Batch in unterschiedlichen Fächern wie "${AEUP_KEY}" vs. "${IT_KEY}" landen.
 
 Erkenne eine leere Ausfüll-"Vorlage" (z.B. eine Vergleichstabelle mit Kopfzeilen wie
 "Lieferant: | Lieferant: | Lieferant:" und leeren Zellen, eine Entscheidungsmatrix, oder leere
