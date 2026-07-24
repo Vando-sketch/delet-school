@@ -88,9 +88,11 @@ function createDoubleFakeQuery(
   return fakeQuery;
 }
 
+const failingAgyRunner = async () => ({ stdout: '', stderr: '', exitCode: 1 });
+
 describe('createFileProcessor', () => {
   it('returns a correctly parsed ProcessedFileResult given a well-formed SDK response', async () => {
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery() });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: failingAgyRunner });
     const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
     expect(result).toEqual({
@@ -123,7 +125,7 @@ describe('createFileProcessor', () => {
       }
     };
 
-    const processor = createFileProcessor({ queryFn: fakeQuery });
+    const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: failingAgyRunner });
     await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
     expect(capturedModelPass2).toBe('claude-sonnet-5');
@@ -150,7 +152,7 @@ describe('createFileProcessor', () => {
       }
     };
 
-    const processor = createFileProcessor({ queryFn: fakeQuery });
+    const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: failingAgyRunner });
     await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
     expect(typeof capturedPrompt).toBe('string');
@@ -181,6 +183,7 @@ describe('createFileProcessor', () => {
     const processor = createFileProcessor({
       queryFn: fakeQuery,
       readImageFile: async () => Buffer.from('fake-png-bytes'),
+      agyRunner: failingAgyRunner,
     });
     const extraction = makeExtraction({ visionPages: [{ pageNumber: 1, imagePath: '/tmp/page-1.png' }] });
 
@@ -197,17 +200,17 @@ describe('createFileProcessor', () => {
   });
 
   it('throws a clear error when the parsed JSON is missing required fields', async () => {
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: { unrelated: true } }) });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: { unrelated: true } }), agyRunner: failingAgyRunner });
     await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/isMaterialblatt/);
   });
 
   it('throws a clear error when the SDK query itself fails (non-success subtype)', async () => {
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ error: { subtype: 'error_during_execution', errors: ['model overloaded'] } }) });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ error: { subtype: 'error_during_execution', errors: ['model overloaded'] } }), agyRunner: failingAgyRunner });
     await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/Claude query failed/);
   });
 
   it('throws a clear error when the SDK yields no result message at all', async () => {
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ empty: true }) });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ empty: true }), agyRunner: failingAgyRunner });
     await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/received no result/);
   });
 
@@ -232,7 +235,7 @@ describe('createFileProcessor', () => {
       }
     };
 
-    const processor = createFileProcessor({ queryFn: fakeQuery });
+    const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: failingAgyRunner });
     await processor.processFile('arbeitsblatt1.pdf', makeExtraction(), [
       { fileName: 'lieferant-a.pdf', excerpt: 'Fachbereich IT/Elektrotechnik - Angebot Lieferant A' },
       { fileName: 'vorlage.docx', excerpt: 'Lieferant: | Lieferant: | Lieferant:' },
@@ -267,7 +270,7 @@ describe('createFileProcessor', () => {
       }
     };
 
-    const processor = createFileProcessor({ queryFn: fakeQuery });
+    const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: failingAgyRunner });
     await processor.processFile('arbeitsblatt1.pdf', makeExtraction(), [
       { fileName: 'lieferant-a.pdf', excerpt: 'some excerpt text' },
     ]);
@@ -300,6 +303,7 @@ describe('createFileProcessor', () => {
     };
     const processor1 = createFileProcessor({
       queryFn: fakeQuery1,
+      agyRunner: failingAgyRunner,
     });
     await processor1.processFile('arbeitsblatt1.pdf', makeExtraction());
 
@@ -323,6 +327,7 @@ describe('createFileProcessor', () => {
     };
     const processor2 = createFileProcessor({
       queryFn: fakeQuery2,
+      agyRunner: failingAgyRunner,
     });
     await processor2.processFile('arbeitsblatt1.pdf', makeExtraction(), []);
 
@@ -331,10 +336,110 @@ describe('createFileProcessor', () => {
 
   it('returns isMaterialblatt=true with an empty tasksFound for reference material', async () => {
     const materialOutput = { isMaterialblatt: true, fach: 'Deutsch', thema: 'Grammatikregeln' };
-    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: materialOutput }) });
+    const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: materialOutput }), agyRunner: failingAgyRunner });
     const result = await processor.processFile('handout.pdf', makeExtraction());
 
     expect(result.isMaterialblatt).toBe(true);
     expect(result.tasksFound).toEqual([]);
+  });
+
+  describe('Gemini (agy) primary path and fallback', () => {
+    it('uses Gemini primary for Pass 1 and Pass 2 when agy succeeds', async () => {
+      let queryFnCalled = false;
+      const fakeQuery: QueryFn = async function* () {
+        queryFnCalled = true;
+      };
+
+      const capturedArgs: string[][] = [];
+      const fakeAgyRunner = async (_cmd: string, args: string[]) => {
+        capturedArgs.push(args);
+        if (capturedArgs.length === 1) {
+          return { stdout: JSON.stringify(PASS1_OUTPUT), stderr: '', exitCode: 0 };
+        } else {
+          return { stdout: JSON.stringify(PASS2_OUTPUT), stderr: '', exitCode: 0 };
+        }
+      };
+
+      const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: fakeAgyRunner });
+      const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
+
+      expect(queryFnCalled).toBe(false);
+      expect(result).toEqual({
+        originalFileName: 'arbeitsblatt1.pdf',
+        isMaterialblatt: false,
+        fach: 'BGWP',
+        thema: 'Kaufvertragsrecht',
+        tasksFound: PASS2_OUTPUT.tasksFound,
+      });
+
+      expect(capturedArgs).toHaveLength(2);
+      expect(capturedArgs[0]).toContain('--model');
+      expect(capturedArgs[0]).toContain('gemini-3.6-flash');
+      expect(capturedArgs[0]).toContain('--effort');
+      expect(capturedArgs[0]).toContain('medium');
+
+      expect(capturedArgs[1]).toContain('--model');
+      expect(capturedArgs[1]).toContain('gemini-3.1-pro');
+      expect(capturedArgs[1]).toContain('--effort');
+      expect(capturedArgs[1]).toContain('high');
+    });
+
+    it('falls back to Claude when agy returns a non-zero exit code', async () => {
+      const fakeAgyRunner = async () => ({ stdout: '', stderr: '', exitCode: 1 });
+      const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: fakeAgyRunner });
+      const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
+
+      expect(result.fach).toBe('BGWP');
+      expect(result.tasksFound).toHaveLength(1);
+    });
+
+    it('falls back to Claude when agy output is malformed JSON', async () => {
+      const fakeAgyRunner = async () => ({ stdout: 'NOT VALID JSON', stderr: '', exitCode: 0 });
+      const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: fakeAgyRunner });
+      const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
+
+      expect(result.fach).toBe('BGWP');
+      expect(result.tasksFound).toHaveLength(1);
+    });
+
+    it('falls back to Claude when agy returns syntactically valid JSON that fails shape validation', async () => {
+      const fakeAgyRunner = async () => ({ stdout: JSON.stringify({ unrelated: true }), stderr: '', exitCode: 0 });
+      const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: fakeAgyRunner });
+      const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
+
+      expect(result.fach).toBe('BGWP');
+      expect(result.tasksFound).toHaveLength(1);
+    });
+
+    it('throws error when both agy and Claude fail', async () => {
+      const fakeAgyRunner = async () => ({ stdout: '', stderr: '', exitCode: 1 });
+      const processor = createFileProcessor({
+        queryFn: createDoubleFakeQuery({ error: { subtype: 'error_during_execution', errors: ['claude error'] } }),
+        agyRunner: fakeAgyRunner,
+      });
+
+      await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/Claude query failed/);
+    });
+
+    it('passes --add-dir and --mode plan to agy when vision pages are present', async () => {
+      const capturedArgs: string[][] = [];
+      const fakeAgyRunner = async (_cmd: string, args: string[]) => {
+        capturedArgs.push(args);
+        if (capturedArgs.length === 1) {
+          return { stdout: JSON.stringify(PASS1_OUTPUT), stderr: '', exitCode: 0 };
+        } else {
+          return { stdout: JSON.stringify(PASS2_OUTPUT), stderr: '', exitCode: 0 };
+        }
+      };
+
+      const processor = createFileProcessor({ agyRunner: fakeAgyRunner });
+      const extraction = makeExtraction({ visionPages: [{ pageNumber: 1, imagePath: '/tmp/job-1/page-1.png' }] });
+      await processor.processFile('vision.pdf', extraction);
+
+      expect(capturedArgs[0]).toContain('--add-dir');
+      expect(capturedArgs[0]).toContain('/tmp/job-1');
+      expect(capturedArgs[0]).toContain('--mode');
+      expect(capturedArgs[0]).toContain('plan');
+    });
   });
 });
