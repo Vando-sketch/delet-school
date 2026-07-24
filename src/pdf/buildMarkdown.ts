@@ -44,6 +44,12 @@ function buildTaskBlock(task: TaskSolution, index: number): string {
 
 export function buildSolutionMarkdown(result: ProcessedFileResult, datum: string): string {
   const frontmatter = buildFrontmatter(result, datum);
+  let backgroundContextSection = '';
+  if (result.hintergrundKontext && result.hintergrundKontext.trim().length > 0) {
+    const escapedContext = escapeForPandoc(result.hintergrundKontext.trim());
+    backgroundContextSection = `::: {.hintergrund-kontext}\n### Hintergrund & Kontext\n\n${escapedContext}\n:::\n\n`;
+  }
   const blocks = result.tasksFound.map((task, index) => buildTaskBlock(task, index));
-  return `${frontmatter}\n\n${blocks.join('\n\n')}\n`;
+  return `${frontmatter}\n\n${backgroundContextSection}${blocks.join('\n\n')}\n`;
 }
+
