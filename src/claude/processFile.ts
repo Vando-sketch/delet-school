@@ -1,6 +1,8 @@
 import { readFile as fsReadFile } from 'node:fs/promises';
+import path from 'node:path';
 import { query as sdkQuery, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import pino from 'pino';
+import { defaultSubprocessRunner, parseDurationToMs, stripJsonFence, type AgySubprocessRunner } from '../agy/index.js';
 import { config } from '../config/index.js';
 import { FACH_KEYS, type FachKey } from '../fach.js';
 import type {
@@ -113,9 +115,6 @@ const PASS2_JSON_SCHEMA = {
 
 function buildSiblingContextSection(siblings: SiblingManifestEntry[] | undefined): string {
   if (!siblings || siblings.length === 0) return '';
-  // Each excerpt is wrapped the same way the primary file's own content is (<file_content>
-  // above) so arbitrary sibling text - untrusted, teacher-uploaded documents - can't blend into
-  // the surrounding instructions or be mistaken for the current file's own content.
   const entries = siblings
     .map((sibling) => `<sibling_file name="${sibling.fileName}">\n${sibling.excerpt}\n</sibling_file>`)
     .join('\n\n');
@@ -160,12 +159,21 @@ async function* buildVisionPrompt(
   };
 }
 
+// One `--add-dir` per unique parent directory across all vision pages - extraction today
+// always renders every page of a job into a single shared `vision-pages` subdirectory, but
+// this doesn't assume that stays true, in case extraction ever changes to per-page dirs.
+function buildAgyAddDirArgs(visionPages: VisionPage[]): string[] {
+  const dirs = [...new Set(visionPages.map((page) => path.dirname(page.imagePath)))];
+  if (dirs.length === 0) return [];
+  return dirs.flatMap((dir) => ['--add-dir', dir]).concat(['--mode', 'plan']);
+}
+
 function parseModelJson(rawText: string, fileName: string): unknown {
   try {
     return JSON.parse(rawText);
   } catch (cause) {
     throw new Error(
-      `claude/processFile: Claude's response for "${fileName}" was not valid JSON: ${
+      `claude/processFile: Response for "${fileName}" was not valid JSON: ${
         cause instanceof Error ? cause.message : String(cause)
       }. Raw response (truncated): ${rawText.slice(0, 500)}`,
     );
@@ -174,18 +182,18 @@ function parseModelJson(rawText: string, fileName: string): unknown {
 
 function validateShapePass1(raw: unknown, fileName: string) {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 1) was not a JSON object.`);
+    throw new Error(`claude/processFile: Response for "${fileName}" (Pass 1) was not a JSON object.`);
   }
   const obj = raw as Record<string, unknown>;
 
   if (typeof obj.isMaterialblatt !== 'boolean') {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 1) is missing "isMaterialblatt".`);
+    throw new Error(`claude/processFile: Response for "${fileName}" (Pass 1) is missing "isMaterialblatt".`);
   }
   if (typeof obj.fach !== 'string' || !(FACH_KEYS as readonly string[]).includes(obj.fach)) {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 1) has an invalid "fach".`);
+    throw new Error(`claude/processFile: Response for "${fileName}" (Pass 1) has an invalid "fach".`);
   }
   if (typeof obj.thema !== 'string') {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 1) is missing "thema".`);
+    throw new Error(`claude/processFile: Response for "${fileName}" (Pass 1) is missing "thema".`);
   }
 
   return {
@@ -198,12 +206,12 @@ function validateShapePass1(raw: unknown, fileName: string) {
 
 function validateShapePass2(raw: unknown, fileName: string): TaskSolution[] {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 2) was not a JSON object.`);
+    throw new Error(`claude/processFile: Response for "${fileName}" (Pass 2) was not a JSON object.`);
   }
   const obj = raw as Record<string, unknown>;
 
   if (!Array.isArray(obj.tasksFound)) {
-    throw new Error(`claude/processFile: Claude's response for "${fileName}" (Pass 2) is missing a "tasksFound" array.`);
+    throw new Error(`claude/processFile: Response for "${fileName}" (Pass 2) is missing a "tasksFound" array.`);
   }
 
   return obj.tasksFound.map((task, index) => {
@@ -226,11 +234,13 @@ function validateShapePass2(raw: unknown, fileName: string): TaskSolution[] {
 export interface CreateFileProcessorOptions {
   queryFn?: QueryFn;
   readImageFile?: ReadImageFileFn;
+  agyRunner?: AgySubprocessRunner;
 }
 
 export function createFileProcessor(options: CreateFileProcessorOptions = {}): FileProcessor {
   const queryFn: QueryFn = options.queryFn ?? sdkQuery;
-  const readImageFile: ReadImageFileFn = options.readImageFile ?? ((path: string) => fsReadFile(path));
+  const readImageFile: ReadImageFileFn = options.readImageFile ?? ((pathStr: string) => fsReadFile(pathStr));
+  const agyRunner: AgySubprocessRunner = options.agyRunner ?? defaultSubprocessRunner;
 
   return {
     async processFile(
@@ -238,53 +248,96 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       extraction: ExtractionResult,
       siblings?: SiblingManifestEntry[],
     ): Promise<ProcessedFileResult> {
-      if (!config.anthropic.apiKey()) {
-        logger.info('ANTHROPIC_API_KEY not set; relying on Claude Code subscription login (`claude login`)');
-      }
-
       const promptText = buildPromptText(fileName, extraction, siblings);
-      const prompt: string | AsyncIterable<SDKUserMessage> =
-        extraction.visionPages.length > 0 ? buildVisionPrompt(promptText, extraction.visionPages, readImageFile) : promptText;
+      let pass1Result: ReturnType<typeof validateShapePass1> | undefined;
 
-      logger.info({ fileName, visionPages: extraction.visionPages.length }, 'Sending file to Claude for Pass 1 (Classification)');
+      // Pass 1: Try Gemini (agy) primary path first
+      try {
+        logger.info({ fileName }, 'Sending file to Gemini (agy) for Pass 1 (Classification)');
+        const agyPrompt1 =
+          extraction.visionPages.length > 0
+            ? SYSTEM_PROMPT +
+              '\n\n' +
+              promptText +
+              `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
+            : SYSTEM_PROMPT + '\n\n' + promptText;
 
-      let resultMessage1: Extract<SDKMessage, { type: 'result' }> | undefined;
+        const agyArgs1 = [
+          '-p',
+          agyPrompt1,
+          '--model',
+          config.agy.pass1Model,
+          '--effort',
+          config.agy.pass1Effort,
+          '--print-timeout',
+          config.agy.printTimeout,
+        ];
+        agyArgs1.push(...buildAgyAddDirArgs(extraction.visionPages));
 
-      for await (const message of queryFn({
-        prompt,
-        options: {
-          systemPrompt: SYSTEM_PROMPT,
-          model: 'claude-3-5-haiku-latest',
-          tools: [],
-          maxTurns: 3,
-          outputFormat: { type: 'json_schema', schema: PASS1_JSON_SCHEMA },
-        },
-      })) {
-        if (message.type === 'system' && message.subtype === 'init') {
-          logger.info({ fileName, apiKeySource: message.apiKeySource }, 'Claude Agent SDK session started (Pass 1)');
+        const timeoutMs = parseDurationToMs(config.agy.printTimeout) + 5000;
+        const { stdout, stderr, exitCode } = await agyRunner(config.agy.binary, agyArgs1, { timeoutMs });
+        if (exitCode !== 0 || !stdout || stdout.trim() === '') {
+          throw new Error(`agy exited with code ${exitCode} or empty stdout. stderr: ${stderr.slice(0, 500)}`);
         }
-        if (message.type === 'result') {
-          resultMessage1 = message;
-        }
-      }
-
-      if (!resultMessage1) {
-        logger.error({ fileName }, 'Claude Agent SDK query produced no result message for Pass 1');
-        throw new Error(`claude/processFile: received no result from Claude for "${fileName}" (Pass 1).`);
-      }
-
-      if (resultMessage1.subtype !== 'success') {
-        logger.error({ fileName, subtype: resultMessage1.subtype, errors: resultMessage1.errors }, 'Claude Agent SDK query did not succeed for Pass 1');
-        throw new Error(
-          `claude/processFile: Claude query failed for "${fileName}" (Pass 1) (${resultMessage1.subtype}): ${resultMessage1.errors?.join('; ') ?? 'unknown error'}`,
+        const cleanJsonText = stripJsonFence(stdout);
+        const pass1Raw = parseModelJson(cleanJsonText, fileName);
+        pass1Result = validateShapePass1(pass1Raw, fileName);
+      } catch (err) {
+        logger.warn(
+          { fileName, err: err instanceof Error ? err.message : String(err) },
+          'Gemini (agy) Pass 1 failed; falling back to Claude Agent SDK',
         );
       }
 
-      const pass1Raw = resultMessage1.structured_output ?? parseModelJson(resultMessage1.result, fileName);
-      const pass1Result = validateShapePass1(pass1Raw, fileName);
+      // Pass 1: Fallback to Claude Agent SDK if Gemini failed
+      if (!pass1Result) {
+        if (!config.anthropic.apiKey()) {
+          logger.info('ANTHROPIC_API_KEY not set; relying on Claude Code subscription login (`claude login`)');
+        }
+
+        const prompt: string | AsyncIterable<SDKUserMessage> =
+          extraction.visionPages.length > 0 ? buildVisionPrompt(promptText, extraction.visionPages, readImageFile) : promptText;
+
+        logger.info({ fileName, visionPages: extraction.visionPages.length }, 'Sending file to Claude for Pass 1 (Classification)');
+
+        let resultMessage1: Extract<SDKMessage, { type: 'result' }> | undefined;
+
+        for await (const message of queryFn({
+          prompt,
+          options: {
+            systemPrompt: SYSTEM_PROMPT,
+            model: 'claude-3-5-haiku-latest',
+            tools: [],
+            maxTurns: 3,
+            outputFormat: { type: 'json_schema', schema: PASS1_JSON_SCHEMA },
+          },
+        })) {
+          if (message.type === 'system' && message.subtype === 'init') {
+            logger.info({ fileName, apiKeySource: message.apiKeySource }, 'Claude Agent SDK session started (Pass 1)');
+          }
+          if (message.type === 'result') {
+            resultMessage1 = message;
+          }
+        }
+
+        if (!resultMessage1) {
+          logger.error({ fileName }, 'Claude Agent SDK query produced no result message for Pass 1');
+          throw new Error(`claude/processFile: received no result from Claude for "${fileName}" (Pass 1).`);
+        }
+
+        if (resultMessage1.subtype !== 'success') {
+          logger.error({ fileName, subtype: resultMessage1.subtype, errors: resultMessage1.errors }, 'Claude Agent SDK query did not succeed for Pass 1');
+          throw new Error(
+            `claude/processFile: Claude query failed for "${fileName}" (Pass 1) (${resultMessage1.subtype}): ${resultMessage1.errors?.join('; ') ?? 'unknown error'}`,
+          );
+        }
+
+        const pass1Raw = resultMessage1.structured_output ?? parseModelJson(resultMessage1.result, fileName);
+        pass1Result = validateShapePass1(pass1Raw, fileName);
+      }
 
       if (pass1Result.isMaterialblatt) {
-        logger.info({ fileName, isMaterialblatt: true }, 'Claude solve complete (Materialblatt, skipping Pass 2)');
+        logger.info({ fileName, isMaterialblatt: true }, 'Solve complete (Materialblatt, skipping Pass 2)');
         return {
           originalFileName: fileName,
           isMaterialblatt: true,
@@ -296,47 +349,93 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       }
 
       logger.info({ fileName }, 'File contains tasks, starting Pass 2 (Solving)');
-
       const pass2PromptText = promptText + `\n\nHinweis aus Pass 1: Fach=${pass1Result.fach}, Thema=${pass1Result.thema}. Bitte Aufgaben lösen.`;
-      const pass2Prompt: string | AsyncIterable<SDKUserMessage> =
-        extraction.visionPages.length > 0 ? buildVisionPrompt(pass2PromptText, extraction.visionPages, readImageFile) : pass2PromptText;
+      let tasksFound: TaskSolution[] | undefined;
 
-      let resultMessage2: Extract<SDKMessage, { type: 'result' }> | undefined;
+      // Pass 2: Try Gemini (agy) primary path first
+      try {
+        logger.info({ fileName }, 'Sending file to Gemini (agy) for Pass 2 (Solving)');
+        const agyPrompt2 =
+          extraction.visionPages.length > 0
+            ? SYSTEM_PROMPT +
+              '\n\n' +
+              pass2PromptText +
+              `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
+            : SYSTEM_PROMPT + '\n\n' + pass2PromptText;
 
-      for await (const message of queryFn({
-        prompt: pass2Prompt,
-        options: {
-          systemPrompt: SYSTEM_PROMPT,
-          model: config.anthropic.model,
-          tools: [],
-          maxTurns: 3,
-          outputFormat: { type: 'json_schema', schema: PASS2_JSON_SCHEMA },
-        },
-      })) {
-        if (message.type === 'system' && message.subtype === 'init') {
-          logger.info({ fileName }, 'Claude Agent SDK session started (Pass 2)');
+        const agyArgs2 = [
+          '-p',
+          agyPrompt2,
+          '--model',
+          config.agy.pass2Model,
+          '--effort',
+          config.agy.pass2Effort,
+          '--print-timeout',
+          config.agy.printTimeout,
+        ];
+        agyArgs2.push(...buildAgyAddDirArgs(extraction.visionPages));
+
+        const timeoutMs = parseDurationToMs(config.agy.printTimeout) + 5000;
+        const { stdout, stderr, exitCode } = await agyRunner(config.agy.binary, agyArgs2, { timeoutMs });
+        if (exitCode !== 0 || !stdout || stdout.trim() === '') {
+          throw new Error(`agy exited with code ${exitCode} or empty stdout. stderr: ${stderr.slice(0, 500)}`);
         }
-        if (message.type === 'result') {
-          resultMessage2 = message;
-        }
-      }
-
-      if (!resultMessage2) {
-        logger.error({ fileName }, 'Claude Agent SDK query produced no result message for Pass 2');
-        throw new Error(`claude/processFile: received no result from Claude for "${fileName}" (Pass 2).`);
-      }
-
-      if (resultMessage2.subtype !== 'success') {
-        logger.error({ fileName, subtype: resultMessage2.subtype, errors: resultMessage2.errors }, 'Claude Agent SDK query did not succeed for Pass 2');
-        throw new Error(
-          `claude/processFile: Claude query failed for "${fileName}" (Pass 2) (${resultMessage2.subtype}): ${resultMessage2.errors?.join('; ') ?? 'unknown error'}`,
+        const cleanJsonText = stripJsonFence(stdout);
+        const pass2Raw = parseModelJson(cleanJsonText, fileName);
+        tasksFound = validateShapePass2(pass2Raw, fileName);
+      } catch (err) {
+        logger.warn(
+          { fileName, err: err instanceof Error ? err.message : String(err) },
+          'Gemini (agy) Pass 2 failed; falling back to Claude Agent SDK',
         );
       }
 
-      const pass2Raw = resultMessage2.structured_output ?? parseModelJson(resultMessage2.result, fileName);
-      const tasksFound = validateShapePass2(pass2Raw, fileName);
+      // Pass 2: Fallback to Claude Agent SDK if Gemini failed
+      if (!tasksFound) {
+        if (!config.anthropic.apiKey()) {
+          logger.info('ANTHROPIC_API_KEY not set; relying on Claude Code subscription login (`claude login`)');
+        }
 
-      logger.info({ fileName, isMaterialblatt: false, tasksFound: tasksFound.length }, 'Claude solve complete');
+        const pass2Prompt: string | AsyncIterable<SDKUserMessage> =
+          extraction.visionPages.length > 0 ? buildVisionPrompt(pass2PromptText, extraction.visionPages, readImageFile) : pass2PromptText;
+
+        let resultMessage2: Extract<SDKMessage, { type: 'result' }> | undefined;
+
+        for await (const message of queryFn({
+          prompt: pass2Prompt,
+          options: {
+            systemPrompt: SYSTEM_PROMPT,
+            model: config.anthropic.model,
+            tools: [],
+            maxTurns: 3,
+            outputFormat: { type: 'json_schema', schema: PASS2_JSON_SCHEMA },
+          },
+        })) {
+          if (message.type === 'system' && message.subtype === 'init') {
+            logger.info({ fileName }, 'Claude Agent SDK session started (Pass 2)');
+          }
+          if (message.type === 'result') {
+            resultMessage2 = message;
+          }
+        }
+
+        if (!resultMessage2) {
+          logger.error({ fileName }, 'Claude Agent SDK query produced no result message for Pass 2');
+          throw new Error(`claude/processFile: received no result from Claude for "${fileName}" (Pass 2).`);
+        }
+
+        if (resultMessage2.subtype !== 'success') {
+          logger.error({ fileName, subtype: resultMessage2.subtype, errors: resultMessage2.errors }, 'Claude Agent SDK query did not succeed for Pass 2');
+          throw new Error(
+            `claude/processFile: Claude query failed for "${fileName}" (Pass 2) (${resultMessage2.subtype}): ${resultMessage2.errors?.join('; ') ?? 'unknown error'}`,
+          );
+        }
+
+        const pass2Raw = resultMessage2.structured_output ?? parseModelJson(resultMessage2.result, fileName);
+        tasksFound = validateShapePass2(pass2Raw, fileName);
+      }
+
+      logger.info({ fileName, isMaterialblatt: false, tasksFound: tasksFound.length }, 'Solve complete');
 
       return {
         originalFileName: fileName,

@@ -86,4 +86,12 @@ export const config = {
     deDicPath: optional('HUNSPELL_DE_DIC_PATH', '/usr/share/hunspell/de_DE.dic'),
     enDicPath: optional('HUNSPELL_EN_DIC_PATH', '/usr/share/hunspell/en_US.dic'),
   },
+  agy: {
+    pass1Model: optional('PASS1_MODEL', 'gemini-3.6-flash'),
+    pass1Effort: optional('PASS1_EFFORT', 'medium'),
+    pass2Model: optional('PASS2_MODEL', 'gemini-3.1-pro'),
+    pass2Effort: optional('PASS2_EFFORT', 'high'),
+    printTimeout: optional('AGY_PRINT_TIMEOUT', '5m'),
+    binary: optional('AGY_BIN', 'agy'),
+  },
 };
