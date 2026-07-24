@@ -153,4 +153,55 @@ describe('createIngestWatcher', () => {
 
     expect(add).not.toHaveBeenCalled();
   });
+
+  it('enqueues a job for a file dropped into a subfolder, using its relative path as originalFileName', async () => {
+    const add = vi.fn().mockResolvedValue(undefined);
+    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
+    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
+
+    await fs.mkdir(path.join(tmpDir, 'Mathe'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, 'Mathe', 'AB1.pdf'), 'content');
+
+    await waitFor(() => add.mock.calls.length >= 1);
+
+    expect(add).toHaveBeenCalledWith(
+      'process-file',
+      expect.objectContaining({
+        filePath: path.join(tmpDir, 'Mathe', 'AB1.pdf'),
+        originalFileName: path.join('Mathe', 'AB1.pdf'),
+      }),
+    );
+  });
+
+  it('ignores a .processed directory nested under a subfolder, not just at the top level', async () => {
+    await fs.mkdir(path.join(tmpDir, 'Mathe', '.processed'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, 'Mathe', '.processed', 'old-result.pdf'), 'already handled');
+
+    const add = vi.fn().mockResolvedValue(undefined);
+    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
+    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it('prefixes extracted zip-content originalFileName with the subfolder the zip itself was dropped into', async () => {
+    const add = vi.fn().mockResolvedValue(undefined);
+    watcher = createIngestWatcher({ queue: { add }, watchDir: tmpDir });
+    await new Promise<void>((resolve) => watcher?.once('ready', resolve));
+
+    await fs.mkdir(path.join(tmpDir, 'Mathe'), { recursive: true });
+    const zip = new AdmZip();
+    zip.addFile('a.txt', Buffer.from('file a'));
+    zip.addFile('b.txt', Buffer.from('file b'));
+    zip.writeZip(path.join(tmpDir, 'Mathe', 'export.zip'));
+
+    await waitFor(() => add.mock.calls.length >= 2);
+
+    const enqueuedNames = (add.mock.calls as [string, { originalFileName: string }][])
+      .map(([, data]) => data.originalFileName)
+      .sort();
+    expect(enqueuedNames).toEqual([path.join('Mathe', 'a.txt'), path.join('Mathe', 'b.txt')]);
+  });
 });
