@@ -255,12 +255,14 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       try {
         logger.info({ fileName }, 'Sending file to Gemini (agy) for Pass 1 (Classification)');
         const agyPrompt1 =
-          extraction.visionPages.length > 0
-            ? SYSTEM_PROMPT +
-              '\n\n' +
-              promptText +
-              `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
-            : SYSTEM_PROMPT + '\n\n' + promptText;
+          SYSTEM_PROMPT +
+          `\n\nErlaubte Fach-Schlüssel ("fach"): ${FACH_KEYS.join(', ')}` +
+          `\n\nJSON Schema:\n${JSON.stringify(PASS1_JSON_SCHEMA, null, 2)}` +
+          '\n\n' +
+          promptText +
+          (extraction.visionPages.length > 0
+            ? `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
+            : '');
 
         const agyArgs1 = [
           '-p',
@@ -306,7 +308,7 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
           prompt,
           options: {
             systemPrompt: SYSTEM_PROMPT,
-            model: 'claude-3-5-haiku-latest',
+            model: config.anthropic.model,
             tools: [],
             maxTurns: 3,
             outputFormat: { type: 'json_schema', schema: PASS1_JSON_SCHEMA },
@@ -356,12 +358,13 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       try {
         logger.info({ fileName }, 'Sending file to Gemini (agy) for Pass 2 (Solving)');
         const agyPrompt2 =
-          extraction.visionPages.length > 0
-            ? SYSTEM_PROMPT +
-              '\n\n' +
-              pass2PromptText +
-              `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
-            : SYSTEM_PROMPT + '\n\n' + pass2PromptText;
+          SYSTEM_PROMPT +
+          `\n\nJSON Schema:\n${JSON.stringify(PASS2_JSON_SCHEMA, null, 2)}` +
+          '\n\n' +
+          pass2PromptText +
+          (extraction.visionPages.length > 0
+            ? `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
+            : '');
 
         const agyArgs2 = [
           '-p',
