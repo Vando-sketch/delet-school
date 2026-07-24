@@ -96,4 +96,8 @@ export const config = {
     printTimeout: optional('AGY_PRINT_TIMEOUT', '5m'),
     binary: optional('AGY_BIN', 'agy'),
   },
+  nearDup: {
+    skipDistance: Number(optional('NEAR_DUP_SKIP_DISTANCE', '3')),
+    flagDistance: Number(optional('NEAR_DUP_FLAG_DISTANCE', '10')),
+  },
 };
