@@ -50,9 +50,10 @@ export const config = {
   // Reached over Tailscale via WebDAV (see the `tailscale` sidecar service in
   // docker-compose.yml) - no filesystem or `occ` access to Nextcloud's host needed.
   nextcloud: {
-    baseUrl: () => required('NEXTCLOUD_BASE_URL'),
-    username: () => required('NEXTCLOUD_USERNAME'),
-    appPassword: () => required('NEXTCLOUD_APP_PASSWORD'),
+    baseUrl: () => optional('NEXTCLOUD_BASE_URL', ''),
+    username: () => optional('NEXTCLOUD_USERNAME', ''),
+    appPassword: () => optional('NEXTCLOUD_APP_PASSWORD', ''),
+    outboxDir: optional('OUTBOX_DIR', '__OUTBOX__'),
   },
   taildrop: {
     // Directory the tailscale sidecar drains its Taildrop queue into (shared Docker volume
@@ -61,8 +62,8 @@ export const config = {
     pollIntervalMs: Number(optional('TAILDROP_POLL_INTERVAL_MS', '5000')),
   },
   student: {
-    name: (): string => required('STUDENT_NAME'),
-    klasse: (): string => required('STUDENT_KLASSE'),
+    name: (): string => optional('STUDENT_NAME', 'Schüler'),
+    klasse: (): string => optional('STUDENT_KLASSE', 'Schule'),
   },
   poppler: {
     pdftotextBin: optional('PDFTOTEXT_BIN', 'pdftotext'),
@@ -75,13 +76,13 @@ export const config = {
     languages: optional('OCR_LANGUAGES', 'deu+eng'),
   },
   markitdown: {
-    binary: optional('MARKITDOWN_BIN', '/app/.venv/bin/markitdown'),
+    binary: optional('MARKITDOWN_BIN', './.venv/bin/markitdown'),
   },
   pandoc: {
     binary: optional('PANDOC_BIN', 'pandoc'),
-    templatePath: optional('PANDOC_TEMPLATE_PATH', '/app/vorlage/template.html'),
-    cssPath: optional('PANDOC_CSS_PATH', '/app/vorlage/style.css'),
-    weasyprintBinary: optional('WEASYPRINT_BIN', '/app/.venv/bin/weasyprint'),
+    templatePath: optional('PANDOC_TEMPLATE_PATH', './docker/vorlage/template.html'),
+    cssPath: optional('PANDOC_CSS_PATH', './docker/vorlage/style.css'),
+    weasyprintBinary: optional('WEASYPRINT_BIN', './.venv/bin/weasyprint'),
   },
   dictionary: {
     deDicPath: optional('HUNSPELL_DE_DIC_PATH', '/usr/share/hunspell/de_DE.dic'),

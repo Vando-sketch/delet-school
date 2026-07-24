@@ -12,6 +12,6 @@ describe('convertToMarkdown', () => {
     const markdown = await convertToMarkdown('/tmp/doc.pdf', execFile);
 
     expect(markdown).toBe('# Extracted heading\n\nBody text.');
-    expect(calls).toEqual([{ file: '/app/.venv/bin/markitdown', args: ['/tmp/doc.pdf'] }]);
+    expect(calls).toEqual([{ file: './.venv/bin/markitdown', args: ['/tmp/doc.pdf'] }]);
   });
 });
