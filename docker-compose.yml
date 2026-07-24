@@ -90,6 +90,23 @@ services:
     network_mode: "service:tailscale"
     volumes:
       - "${INGEST_WATCH_DIR_HOST:-./inbox}:${INGEST_WATCH_DIR:-/app/inbox}"
+      # agy's (Antigravity CLI) Google-account auth state, pre-authenticated on the host by
+      # running `agy` interactively once (not something a headless container can do itself)
+      # and mirroring that state in here - same pattern as the tailscale-state volume above,
+      # but a host bind mount (not a Docker-managed volume) since the container needs to
+      # start from state that already exists on the host, not populate it from empty.
+      # UNVERIFIED end-to-end (see docs/superpowers/specs/2026-07-24-gemini-agy-integration-design.md,
+      # "Infra changes"): whether this credential state is portable across machines/OSes
+      # (macOS Keychain-bound vs. a portable file), and whether token refresh works
+      # unattended inside the container, have not been confirmed on a real Docker host - this
+      # is the wiring the design calls for, not a verified-working setup. If `agy` prompts for
+      # login instead of authenticating from this mount, the worker still functions via the
+      # unchanged Claude Agent SDK fallback (see src/claude/processFile.ts) - it just silently
+      # never benefits from the Gemini/agy primary path until this is fixed.
+      # Required, no default: Compose does not expand `~`, so AGY_CREDENTIAL_DIR_HOST must be
+      # set in .env as an absolute path (e.g. /home/<you>/.gemini) rather than falling back
+      # to a literal "~" directory.
+      - "${AGY_CREDENTIAL_DIR_HOST:?Set AGY_CREDENTIAL_DIR_HOST to an absolute host path for agy's pre-authenticated ~/.gemini dir}:/home/nodejs/.gemini"
     depends_on:
       tailscale:
         condition: service_healthy
