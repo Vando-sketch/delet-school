@@ -5,7 +5,6 @@ dist/
 .DS_Store
 .claude/
 .superpowers/
-__INBOX__/
 __LOCAL_NEXTCLOUD_TEST__/
 .worktrees/
 .agents/
