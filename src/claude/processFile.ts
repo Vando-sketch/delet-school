@@ -76,6 +76,28 @@ Löse jede Aufgabe vollständig und präzise, ohne Füllsätze. Nenne Paragraphe
 Quellen im "quelle"-Feld, wo zutreffend. Wenn das Dokument keine Aufgaben enthält (Materialblatt),
 gib ein leeres "tasksFound"-Array zurück.
 
+DATEN-STRENGER-BEZUG:
+Verwende zur Lösung der Aufgaben AUSSCHLIESSLICH die im Dokument (sowie in etwaigen
+Geschwisterdateien desselben Batches) bereitgestellten Zahlen, Prozentsätze, Formeln, Vorgaben
+und Tabellenwerte. Nutze KEINE erfundenen oder auswendig gelernten Altdaten oder abweichenden
+Pauschalen, wenn das Aufgaben- oder Materialblatt konkrete Werte nennt. Wenn das Dokument
+bestimmte Beitragssätze, Bemessungsgrenzen oder Steuersätze vorgibt, verwende exakt diese —
+nicht allgemein bekannte Werte aus anderen Jahren oder Quellen.
+
+TABELLARISCHE LÖSUNGS-STRUKTUR:
+Wenn eine Aufgabe 3 oder mehr vergleichbare Fälle, Datensätze oder Zeilen enthält (z.B. Fall 1,
+Fall 2, Fall 3; ein Lieferantenvergleich über mehere Anbieter; eine Lohnabrechnung für mehere
+Mitarbeiter), MUSS die "proposedSolution" als übersichtliche Markdown-Tabelle aufgebaut sein.
+Einfache Berechnungen mit nur 1-2 Schritten bleiben als Fließtext.
+
+Beispiel für das Markdown-Tabellen-Format in proposedSolution:
+
+| Position | Fall 1 (€) | Fall 2 (€) | Fall 3 (€) |
+| :--- | :---: | :---: | :---: |
+| Grundentgelt | 2.500,00 | 5.500,00 | 7.800,00 |
+| + Zulagen | + 20,00 | + 20,00 | + 20,00 |
+| **= Brutto** | **2.520,00** | **5.520,00** | **7.820,00** |
+
 Antworte ausschließlich mit dem im Schema beschriebenen JSON.`;
 
 const PASS1_JSON_SCHEMA = {
