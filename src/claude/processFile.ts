@@ -76,6 +76,26 @@ Löse jede Aufgabe vollständig und präzise, ohne Füllsätze. Nenne Paragraphe
 Quellen im "quelle"-Feld, wo zutreffend. Wenn das Dokument keine Aufgaben enthält (Materialblatt),
 gib ein leeres "tasksFound"-Array zurück.
 
+DATEN-STRENGER-BEZUG & RECHERCHE:
+Verwende zur Lösung der Aufgaben bevorzugt die im Dokument (sowie in etwaigen Geschwisterdateien desselben Batches oder Faches) bereitgestellten Zahlen, Prozentsätze, Formeln, Vorgaben und Tabellenwerte. Wenn das Aufgaben- oder Materialblatt konkrete Werte nennt, verwende AUSSCHLIESSLICH diese — nutze keine erfundenen oder abweichenden Pauschalen.
+Sollten im Dokument oder im Batch-/Fach-Kontext notwendige Gesetzestexte, Beitragssätze, Beitragsbemessungsgrenzen, Steuersätze oder Formeln FEHLEN und das Modell auch nur GERINGFÜGIG UNSICHER bezüglich der exakten aktuellen Werte oder Rechtsnormen sein, MUSS eine Webrecherche (Websearch) durchgeführt werden, um die Angaben vor der Lösungserstellung eindeutig abzusichern und zu klären.
+Löse SÄMTLICHE in Aufgaben- und Übungstabellen genannten Fälle vollständig (z.B. wenn eine Übungstabelle 4 Fälle vorgibt: Fall 1, Fall 2, Fall 3, Fall 4, MÜSSEN alle 4 Fälle in der Lösung berechnet und aufgeführt werden).
+WICHTIG: Falls ein Dokument sowohl eine Aufgabenstellung (z.B. Übungstabelle mit Fall 1 bis Fall 4) als auch ein nachfolgendes Schema oder eine Teilvorlage enthält, ist stets die vollständige AUFGABENSTELLUNG maßgeblich — berechne alle darin geforderten Fälle (z.B. Fall 1, Fall 2, Fall 3, Fall 4). Erfasse ALLE in der Übungstabelle abgedruckten Spalten/Fälle, selbst wenn im Einleitungstext eine abweichende Fallzahl genannt wird.
+
+TABELLARISCHE LÖSUNGS-STRUKTUR:
+Wenn eine Aufgabe 3 oder mehr vergleichbare Fälle, Datensätze oder Zeilen enthält (z.B. Fall 1,
+Fall 2, Fall 3, Fall 4; ein Lieferantenvergleich über mehrere Anbieter; eine Lohnabrechnung für mehrere
+Mitarbeiter), MUSS die "proposedSolution" als übersichtliche Markdown-Tabelle aufgebaut sein.
+Einfache Berechnungen mit nur 1-2 Schritten bleiben als Fließtext.
+
+Beispiel für das Markdown-Tabellen-Format in proposedSolution:
+
+| Position | Fall 1 (€) | Fall 2 (€) | Fall 3 (€) |
+| :--- | :---: | :---: | :---: |
+| Grundentgelt | 2.500,00 | 5.500,00 | 7.800,00 |
+| + Zulagen | + 20,00 | + 20,00 | + 20,00 |
+| **= Brutto** | **2.520,00** | **5.520,00** | **7.820,00** |
+
 Antworte ausschließlich mit dem im Schema beschriebenen JSON.`;
 
 const PASS1_JSON_SCHEMA = {
@@ -164,8 +184,11 @@ async function* buildVisionPrompt(
 // this doesn't assume that stays true, in case extraction ever changes to per-page dirs.
 function buildAgyAddDirArgs(visionPages: VisionPage[]): string[] {
   const dirs = [...new Set(visionPages.map((page) => path.dirname(page.imagePath)))];
-  if (dirs.length === 0) return [];
-  return dirs.flatMap((dir) => ['--add-dir', dir]).concat(['--mode', 'plan']);
+  const args = ['--dangerously-skip-permissions'];
+  if (dirs.length > 0) {
+    args.unshift(...dirs.flatMap((dir) => ['--add-dir', dir]), '--mode', 'plan');
+  }
+  return args;
 }
 
 function parseModelJson(rawText: string, fileName: string): unknown {
@@ -255,12 +278,14 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       try {
         logger.info({ fileName }, 'Sending file to Gemini (agy) for Pass 1 (Classification)');
         const agyPrompt1 =
-          extraction.visionPages.length > 0
-            ? SYSTEM_PROMPT +
-              '\n\n' +
-              promptText +
-              `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
-            : SYSTEM_PROMPT + '\n\n' + promptText;
+          SYSTEM_PROMPT +
+          `\n\nErlaubte Fach-Schlüssel ("fach"): ${FACH_KEYS.join(', ')}` +
+          `\n\nJSON Schema:\n${JSON.stringify(PASS1_JSON_SCHEMA, null, 2)}` +
+          '\n\n' +
+          promptText +
+          (extraction.visionPages.length > 0
+            ? `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
+            : '');
 
         const agyArgs1 = [
           '-p',
@@ -306,7 +331,7 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
           prompt,
           options: {
             systemPrompt: SYSTEM_PROMPT,
-            model: 'claude-3-5-haiku-latest',
+            model: config.anthropic.model,
             tools: [],
             maxTurns: 3,
             outputFormat: { type: 'json_schema', schema: PASS1_JSON_SCHEMA },
@@ -356,12 +381,13 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       try {
         logger.info({ fileName }, 'Sending file to Gemini (agy) for Pass 2 (Solving)');
         const agyPrompt2 =
-          extraction.visionPages.length > 0
-            ? SYSTEM_PROMPT +
-              '\n\n' +
-              pass2PromptText +
-              `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
-            : SYSTEM_PROMPT + '\n\n' + pass2PromptText;
+          SYSTEM_PROMPT +
+          `\n\nJSON Schema:\n${JSON.stringify(PASS2_JSON_SCHEMA, null, 2)}` +
+          '\n\n' +
+          pass2PromptText +
+          (extraction.visionPages.length > 0
+            ? `\n\nBilder der Seiten: ${extraction.visionPages.map((p) => `Seite ${p.pageNumber}: ${p.imagePath}`).join(', ')}. Bitte schaue dir diese Bild-Dateien an.`
+            : '');
 
         const agyArgs2 = [
           '-p',

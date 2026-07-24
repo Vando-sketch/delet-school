@@ -115,3 +115,33 @@ export async function getPageText(
   ]);
   return stdout;
 }
+
+export async function getPagesWithContentImages(
+  pdfPath: string,
+  execFile: ExecFileFn = defaultExecFile,
+): Promise<Set<number>> {
+  try {
+    const { stdout } = await execFile(config.poppler.pdfimagesBin, ['-list', pdfPath]);
+    const pages = new Set<number>();
+    const lines = stdout.split('\n');
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length >= 5) {
+        const pageNum = Number(parts[0]);
+        const width = Number(parts[3]);
+        const height = Number(parts[4]);
+        if (!isNaN(pageNum) && !isNaN(width) && !isNaN(height)) {
+          // Exclude small logo/header/footer images (e.g. <= 200x200)
+          if (width >= 200 && height >= 200) {
+            pages.add(pageNum);
+          }
+        }
+      }
+    }
+    return pages;
+  } catch (err) {
+    logger.warn({ err, pdfPath }, 'pdfimages -list failed; falling back to text-only quality check');
+    return new Set<number>();
+  }
+}
+

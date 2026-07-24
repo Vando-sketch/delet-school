@@ -93,3 +93,38 @@ body {
   color: #888;
   padding-left: 10px;
 }
+
+/* Tables — for comparative/multi-case solutions rendered from Markdown pipe tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0 20px;
+  font-size: 13px;
+  line-height: 1.5;
+  page-break-inside: avoid;
+}
+
+th,
+td {
+  border: 1px solid #d0d0d0;
+  padding: 10px 14px;
+  text-align: left;
+}
+
+th {
+  background-color: #f4f4f4;
+  font-family: 'Liberation Sans', sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 10px 14px 9px;
+  letter-spacing: 0.3px;
+}
+
+td {
+  vertical-align: top;
+}
+
+tr:nth-child(even) td {
+  background-color: #fafafa;
+}
+
