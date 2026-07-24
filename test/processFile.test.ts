@@ -442,4 +442,86 @@ describe('createFileProcessor', () => {
       expect(capturedArgs[0]).toContain('plan');
     });
   });
+
+  it('includes strict data adherence instruction in the agy prompt', async () => {
+    let capturedAgyPrompt = '';
+    const capturingAgyRunner = async (_bin: string, args: string[]) => {
+      const pIdx = args.indexOf('-p');
+      if (pIdx !== -1) capturedAgyPrompt = args[pIdx + 1] ?? '';
+      return {
+        stdout: JSON.stringify({
+          isMaterialblatt: true,
+          fach: 'BGWP',
+          thema: 'Test',
+        }),
+        stderr: '',
+        exitCode: 0,
+      };
+    };
+
+    const processor = createFileProcessor({
+      queryFn: createDoubleFakeQuery(),
+      agyRunner: capturingAgyRunner,
+    });
+    await processor.processFile('test.pdf', makeExtraction());
+
+    expect(capturedAgyPrompt).toContain('AUSSCHLIESSLICH');
+    expect(capturedAgyPrompt).toContain('DATEN-STRENGER-BEZUG');
+  });
+
+  it('includes tabular formatting instruction in the agy prompt', async () => {
+    let capturedAgyPrompt = '';
+    const capturingAgyRunner = async (_bin: string, args: string[]) => {
+      const pIdx = args.indexOf('-p');
+      if (pIdx !== -1) capturedAgyPrompt = args[pIdx + 1] ?? '';
+      return {
+        stdout: JSON.stringify({
+          isMaterialblatt: true,
+          fach: 'BGWP',
+          thema: 'Test',
+        }),
+        stderr: '',
+        exitCode: 0,
+      };
+    };
+
+    const processor = createFileProcessor({
+      queryFn: createDoubleFakeQuery(),
+      agyRunner: capturingAgyRunner,
+    });
+    await processor.processFile('test.pdf', makeExtraction());
+
+    expect(capturedAgyPrompt).toContain('TABELLARISCHE');
+    expect(capturedAgyPrompt).toContain('Markdown-Tabelle');
+    expect(capturedAgyPrompt).toContain('| Position');
+  });
+
+  it('includes strict data adherence instruction in the Claude systemPrompt', async () => {
+    let capturedSystemPrompt: unknown;
+    let callCount = 0;
+    const fakeQuery: QueryFn = async function* (params) {
+      callCount++;
+      if (callCount === 1) {
+        capturedSystemPrompt = params.options?.systemPrompt;
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS1_OUTPUT),
+          structured_output: PASS1_OUTPUT,
+        });
+      } else {
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS2_OUTPUT),
+          structured_output: PASS2_OUTPUT,
+        });
+      }
+    };
+
+    const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: failingAgyRunner });
+    await processor.processFile('test.pdf', makeExtraction());
+
+    expect(capturedSystemPrompt).toContain('AUSSCHLIESSLICH');
+    expect(capturedSystemPrompt).toContain('DATEN-STRENGER-BEZUG');
+  });
 });
+
