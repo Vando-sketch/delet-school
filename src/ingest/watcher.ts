@@ -9,6 +9,7 @@ import { config } from '../config/index.js';
 import { getFileJobQueue, type FileJobData, type SiblingManifestEntry } from '../queue/index.js';
 import { createTaildropDrain } from './taildropDrain.js';
 import { buildSiblingManifest } from './siblingManifest.js';
+import { renameOrCopy } from '../lib/renameOrCopy.js';
 
 const logger = pino({ name: 'ingest-watcher' });
 
@@ -75,12 +76,12 @@ async function listFilesRecursive(dir: string): Promise<string[]> {
   return files;
 }
 
-/** Moves a fully-handled top-level file into `watchDir/dirName`, timestamp-prefixed to avoid collisions. */
+/** Moves a fully-handled file into `watchDir/dirName`, timestamp-prefixed to avoid collisions. */
 async function archiveFile(watchDir: string, filePath: string, dirName: string): Promise<void> {
   const destDir = path.join(watchDir, dirName);
   await fs.mkdir(destDir, { recursive: true });
   const dest = path.join(destDir, `${Date.now()}-${path.basename(filePath)}`);
-  await fs.rename(filePath, dest);
+  await renameOrCopy(filePath, dest);
 }
 
 /**
