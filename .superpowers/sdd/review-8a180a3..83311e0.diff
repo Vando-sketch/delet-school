@@ -1,0 +1,348 @@
+# Review package: 8a180a3fcf6409bc1aa85fbf75cf1ff9b61e9e9d..HEAD
+
+## Commits
+83311e0 fix: keep extraction scratch dir on the same filesystem as the watch dir, clean it up unconditionally
+a055b8b feat: wire extraction -> solve -> PDF generation/material routing -> archive in the worker
+
+## Files changed
+ src/worker/index.ts |  57 ++++++++++++-------
+ test/worker.test.ts | 158 +++++++++++++++++++++++++++++++++++++---------------
+ 2 files changed, 150 insertions(+), 65 deletions(-)
+
+## Diff
+diff --git a/src/worker/index.ts b/src/worker/index.ts
+index e4f36c7..12ad5bc 100644
+--- a/src/worker/index.ts
++++ b/src/worker/index.ts
+@@ -1,65 +1,84 @@
+ import { promises as fs } from 'node:fs';
+ import * as path from 'node:path';
++import { randomUUID } from 'node:crypto';
+ import { Worker, type Job } from 'bullmq';
+-import mime from 'mime-types';
+ import pino from 'pino';
+ import { QUEUE_NAME, getRedisConnection, type FileJobData } from '../queue/index.js';
++import { extractFile } from '../extract/index.js';
+ import { createFileProcessor } from '../claude/processFile.js';
++import { buildSolutionMarkdown } from '../pdf/buildMarkdown.js';
++import { renderSolutionPdf } from '../pdf/renderPdf.js';
+ import { createNextcloudWriter } from '../nextcloud/writeResult.js';
+ import { config } from '../config/index.js';
+-import type { DownloadedFile } from '../types.js';
++import type { NextcloudWriteContent } from '../types.js';
+ 
+ const logger = pino({ name: 'worker' });
+ 
+ const fileProcessor = createFileProcessor();
+ const nextcloudWriter = createNextcloudWriter();
+ 
+-/**
+- * Moves a job's source file out of the ingest watcher's active tree (into `.processed` or
+- * `.failed`) so it's never picked up again, then removes the staging directory it came from
+- * if that was left empty (zip-extracted files each live in their own staging subdirectory).
+- */
++function today(): string {
++  return new Date().toISOString().slice(0, 10);
++}
++
+ async function archiveFile(filePath: string, dirName: string): Promise<void> {
+   const watchDir = path.resolve(config.ingest.watchDir);
+   const destDir = path.join(watchDir, dirName);
+   await fs.mkdir(destDir, { recursive: true });
+   const dest = path.join(destDir, `${Date.now()}-${path.basename(filePath)}`);
+   await fs.rename(filePath, dest);
+ 
+   const sourceDir = path.dirname(filePath);
+   if (sourceDir !== watchDir) {
+     await fs.rmdir(sourceDir).catch(() => undefined);
+   }
+ }
+ 
+ async function handleJob(job: Job<FileJobData>): Promise<void> {
+   const { filePath, originalFileName } = job.data;
+   logger.info({ jobId: job.id, filePath, originalFileName }, 'processing file job');
+ 
+-  const content = await fs.readFile(filePath);
+-  const file: DownloadedFile = {
+-    fileName: originalFileName,
+-    mimeType: mime.lookup(originalFileName) || 'application/octet-stream',
+-    content,
+-  };
+-
++  // Kept inside watchDir (in the same ignored staging subfolder the ingest watcher uses for
++  // zip extraction) rather than os.tmpdir(), so it's on the same filesystem/device as the
++  // archive destinations - fs.rename() in archiveFile() can't cross a device boundary (EXDEV).
++  const workDir = path.join(path.resolve(config.ingest.watchDir), config.ingest.stagingDirName, randomUUID());
++  let archivalPath = filePath;
+   try {
+-    const result = await fileProcessor.processFile(file);
+-    const { writtenPath } = await nextcloudWriter.writeResult(result, file);
+-    await archiveFile(filePath, config.ingest.processedDirName);
++    await fs.mkdir(workDir, { recursive: true });
++    const extraction = await extractFile(filePath, workDir);
++    archivalPath = extraction.archivalPdfPath;
++
++    const result = await fileProcessor.processFile(originalFileName, extraction);
++    const datum = today();
++
++    let content: NextcloudWriteContent;
++    if (result.isMaterialblatt) {
++      content = { kind: 'material', sourcePath: extraction.archivalPdfPath };
++    } else {
++      const markdown = buildSolutionMarkdown(result, datum);
++      const pdfBytes = await renderSolutionPdf(markdown);
++      content = { kind: 'pdf', bytes: pdfBytes };
++    }
++
++    const { writtenPath } = await nextcloudWriter.writeResult(result, content, datum);
++    await archiveFile(archivalPath, config.ingest.processedDirName);
+     logger.info({ jobId: job.id, writtenPath, tasksFound: result.tasksFound.length }, 'file job complete');
+   } catch (err) {
+-    await archiveFile(filePath, config.ingest.failedDirName).catch((archiveErr: unknown) => {
+-      logger.error({ archiveErr, filePath }, 'Failed to archive file after processing failure');
++    await archiveFile(archivalPath, config.ingest.failedDirName).catch((archiveErr: unknown) => {
++      logger.error({ archiveErr, filePath: archivalPath }, 'Failed to archive file after processing failure');
+     });
+     throw err;
++  } finally {
++    // Always clean up the scratch dir (OCR output, vision-fallback page images), whether the
++    // job succeeded, failed, or archiving failed - it's created fresh per job and never reused.
++    await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+   }
+ }
+ 
+ export function createFileJobWorker(): Worker<FileJobData> {
+   const worker = new Worker<FileJobData>(QUEUE_NAME, handleJob, {
+     connection: getRedisConnection(),
+   });
+ 
+   worker.on('failed', (job, err) => {
+     logger.error({ jobId: job?.id, err }, 'file job failed');
+diff --git a/test/worker.test.ts b/test/worker.test.ts
+index 1e3507e..d9e9dca 100644
+--- a/test/worker.test.ts
++++ b/test/worker.test.ts
+@@ -1,111 +1,177 @@
+ import { describe, expect, it, vi, beforeEach } from 'vitest';
+ 
++const extractFile = vi.fn();
++const buildSolutionMarkdown = vi.fn();
++const renderSolutionPdf = vi.fn();
+ const processFile = vi.fn();
+ const writeResult = vi.fn();
+-const readFile = vi.fn();
+ const mkdir = vi.fn();
+ const rename = vi.fn();
+ const rmdir = vi.fn();
++const rm = vi.fn();
++const randomUUID = vi.fn();
+ 
+ vi.mock('node:fs', () => ({
+-  promises: { readFile, mkdir, rename, rmdir },
+-}));
+-vi.mock('../src/claude/processFile.js', () => ({
+-  createFileProcessor: () => ({ processFile }),
+-}));
+-vi.mock('../src/nextcloud/writeResult.js', () => ({
+-  createNextcloudWriter: () => ({ writeResult }),
++  promises: { mkdir, rename, rmdir, rm },
+ }));
++vi.mock('node:crypto', () => ({ randomUUID }));
++vi.mock('../src/extract/index.js', () => ({ extractFile }));
++vi.mock('../src/pdf/buildMarkdown.js', () => ({ buildSolutionMarkdown }));
++vi.mock('../src/pdf/renderPdf.js', () => ({ renderSolutionPdf }));
++vi.mock('../src/claude/processFile.js', () => ({ createFileProcessor: () => ({ processFile }) }));
++vi.mock('../src/nextcloud/writeResult.js', () => ({ createNextcloudWriter: () => ({ writeResult }) }));
+ vi.mock('../src/queue/index.js', () => ({
+   QUEUE_NAME: 'teams-file-jobs',
+   getRedisConnection: () => ({}),
+ }));
+ vi.mock('bullmq', () => ({
+   Worker: vi.fn().mockImplementation(() => ({ on: vi.fn() })),
+ }));
+ 
+-// Fixed so job filePaths below can be asserted against a known watchDir - config.ingest is
+-// evaluated eagerly at import time, so this must be set before src/worker/index.js is loaded.
+ process.env.INGEST_WATCH_DIR = '/inbox';
+ 
++const AUFGABENBLATT_RESULT = {
++  originalFileName: 'arbeitsblatt1.pdf',
++  isMaterialblatt: false,
++  fach: 'BGWP',
++  thema: 'Kaufvertragsrecht',
++  tasksFound: [{ title: 't', taskDescription: 'q', proposedSolution: 'a' }],
++};
++
++const MATERIAL_RESULT = {
++  originalFileName: 'handout.pdf',
++  isMaterialblatt: true,
++  fach: 'Deutsch',
++  thema: 'Grammatikregeln',
++  tasksFound: [],
++};
++
+ describe('worker pipeline', () => {
+   beforeEach(() => {
+     vi.clearAllMocks();
++    randomUUID.mockReturnValue('job-abc123');
+     mkdir.mockResolvedValue(undefined);
+     rename.mockResolvedValue(undefined);
+     rmdir.mockResolvedValue(undefined);
++    rm.mockResolvedValue(undefined);
+   });
+ 
+-  it('reads, processes, and writes a file job end to end, then archives the source file', async () => {
+-    const content = Buffer.from('# hi');
+-    const result = { originalFileName: 'notes.md', tasksFound: [], summaryMarkdown: '# Summary' };
+-    readFile.mockResolvedValue(content);
+-    processFile.mockResolvedValue(result);
+-    writeResult.mockResolvedValue({ writtenPath: '/data/user/files/teams-task-agent/notes.tasks.md' });
++  it('extracts, solves, renders a PDF, writes it, and archives the raw source when OCR did not run', async () => {
++    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/arbeitsblatt1.pdf' });
++    processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
++    buildSolutionMarkdown.mockReturnValue('# solution markdown');
++    renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
++    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf' });
+ 
+     const { createFileJobWorker } = await import('../src/worker/index.js');
+     const { Worker } = await import('bullmq');
+-
+     createFileJobWorker();
+ 
+     const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+-    const job = { id: '1', data: { filePath: '/inbox/notes.md', originalFileName: 'notes.md', receivedAt: 'now' } };
++    const job = { id: '1', data: { filePath: '/inbox/arbeitsblatt1.pdf', originalFileName: 'arbeitsblatt1.pdf', receivedAt: 'now' } };
+     await handler(job);
+ 
+-    expect(readFile).toHaveBeenCalledWith('/inbox/notes.md');
+-    expect(processFile).toHaveBeenCalledWith({ fileName: 'notes.md', mimeType: 'text/markdown', content });
+-    expect(writeResult).toHaveBeenCalledWith(result, { fileName: 'notes.md', mimeType: 'text/markdown', content });
+-
+-    // Source file archived into the processed dir, not left in place.
++    expect(extractFile).toHaveBeenCalledWith('/inbox/arbeitsblatt1.pdf', '/inbox/.staging/job-abc123');
++    expect(processFile).toHaveBeenCalledWith('arbeitsblatt1.pdf', expect.objectContaining({ markdown: '# text' }));
++    expect(buildSolutionMarkdown).toHaveBeenCalledWith(AUFGABENBLATT_RESULT, expect.any(String));
++    expect(renderSolutionPdf).toHaveBeenCalledWith('# solution markdown');
++    expect(writeResult).toHaveBeenCalledWith(
++      AUFGABENBLATT_RESULT,
++      { kind: 'pdf', bytes: Buffer.from('%PDF fake') },
++      expect.any(String),
++    );
++
++    // ranOcr was false, so the ORIGINAL file (not archivalPdfPath) is archived.
+     expect(rename).toHaveBeenCalledTimes(1);
+     const [movedFrom, movedTo] = rename.mock.calls[0] as [string, string];
+-    expect(movedFrom).toBe('/inbox/notes.md');
+-    expect(movedTo).toMatch(/[/\\]\.processed[/\\]\d+-notes\.md$/);
+-    // Source file sat directly in the watch root, not a staging subdir - nothing to clean up.
+-    expect(rmdir).not.toHaveBeenCalled();
++    expect(movedFrom).toBe('/inbox/arbeitsblatt1.pdf');
++    expect(movedTo).toMatch(/[/\\]\.processed[/\\]\d+-arbeitsblatt1\.pdf$/);
++
++    // The per-job scratch dir (created on the same filesystem as watchDir, not os.tmpdir())
++    // is unconditionally removed once the job finishes, success or failure.
++    expect(mkdir).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true });
++    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
+   });
+ 
+-  it('archives the source file into the failed dir and rethrows when processing fails', async () => {
+-    const content = Buffer.from('# hi');
+-    readFile.mockResolvedValue(content);
+-    processFile.mockRejectedValue(new Error('claude blew up'));
++  it('archives the OCR\'d searchable PDF (not the raw scan) when extraction ran OCR', async () => {
++    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: true, archivalPdfPath: '/inbox/.staging/job-abc123/ocr.pdf' });
++    processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
++    buildSolutionMarkdown.mockReturnValue('# solution markdown');
++    renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
++    writeResult.mockResolvedValue({ writtenPath: '/data/x.pdf' });
+ 
+     const { createFileJobWorker } = await import('../src/worker/index.js');
+     const { Worker } = await import('bullmq');
++    createFileJobWorker();
+ 
++    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
++    const job = { id: '1', data: { filePath: '/inbox/scan.pdf', originalFileName: 'scan.pdf', receivedAt: 'now' } };
++    await handler(job);
++
++    const [movedFrom] = rename.mock.calls[0] as [string, string];
++    expect(movedFrom).toBe('/inbox/.staging/job-abc123/ocr.pdf');
++
++    // The scratch dir the OCR'd PDF lived in is removed after archiveFile has moved it out -
++    // this is the case archiveFile's own best-effort rmdir can silently fail on (non-recursive,
++    // vision-pages/ subfolder), so the unconditional recursive fs.rm must cover it.
++    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
++  });
++
++  it('skips PDF generation and writes the archival source directly for a Materialblatt', async () => {
++    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/handout.pdf' });
++    processFile.mockResolvedValue(MATERIAL_RESULT);
++    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/Deutsch/Material/handout_2026-07-23.pdf' });
++
++    const { createFileJobWorker } = await import('../src/worker/index.js');
++    const { Worker } = await import('bullmq');
++    createFileJobWorker();
++
++    const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
++    const job = { id: '1', data: { filePath: '/inbox/handout.pdf', originalFileName: 'handout.pdf', receivedAt: 'now' } };
++    await handler(job);
++
++    expect(buildSolutionMarkdown).not.toHaveBeenCalled();
++    expect(renderSolutionPdf).not.toHaveBeenCalled();
++    expect(writeResult).toHaveBeenCalledWith(
++      MATERIAL_RESULT,
++      { kind: 'material', sourcePath: '/inbox/handout.pdf' },
++      expect.any(String),
++    );
++  });
++
++  it('archives the source into the failed dir and rethrows when extraction fails', async () => {
++    extractFile.mockRejectedValue(new Error('ocrmypdf blew up'));
++
++    const { createFileJobWorker } = await import('../src/worker/index.js');
++    const { Worker } = await import('bullmq');
+     createFileJobWorker();
+ 
+     const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+-    const job = { id: '1', data: { filePath: '/inbox/notes.md', originalFileName: 'notes.md', receivedAt: 'now' } };
++    const job = { id: '1', data: { filePath: '/inbox/arbeitsblatt1.pdf', originalFileName: 'arbeitsblatt1.pdf', receivedAt: 'now' } };
+ 
+-    await expect(handler(job)).rejects.toThrow('claude blew up');
++    await expect(handler(job)).rejects.toThrow('ocrmypdf blew up');
+ 
+     expect(writeResult).not.toHaveBeenCalled();
+-    expect(rename).toHaveBeenCalledTimes(1);
+     const [, movedTo] = rename.mock.calls[0] as [string, string];
+-    expect(movedTo).toMatch(/[/\\]\.failed[/\\]\d+-notes\.md$/);
+-    expect(rmdir).not.toHaveBeenCalled();
++    expect(movedTo).toMatch(/[/\\]\.failed[/\\]\d+-arbeitsblatt1\.pdf$/);
++
++    // Scratch dir cleanup runs even on the failure path, after the failed-dir archive attempt.
++    expect(rm).toHaveBeenCalledWith('/inbox/.staging/job-abc123', { recursive: true, force: true });
+   });
+ 
+   it('cleans up a zip-extraction staging directory after archiving the file it contained', async () => {
+-    const content = Buffer.from('# hi');
+-    const result = { originalFileName: 'a.md', tasksFound: [], summaryMarkdown: '# Summary' };
+-    readFile.mockResolvedValue(content);
+-    processFile.mockResolvedValue(result);
+-    writeResult.mockResolvedValue({ writtenPath: '/data/user/files/teams-task-agent/a.tasks.md' });
++    extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/.staging/uuid-1/a.md' });
++    processFile.mockResolvedValue({ ...MATERIAL_RESULT, originalFileName: 'a.md' });
++    writeResult.mockResolvedValue({ writtenPath: '/data/x.md' });
+ 
+     const { createFileJobWorker } = await import('../src/worker/index.js');
+     const { Worker } = await import('bullmq');
+-
+     createFileJobWorker();
+ 
+     const handler = vi.mocked(Worker).mock.calls[0][1] as (job: unknown) => Promise<void>;
+-    const job = {
+-      id: '1',
+-      data: { filePath: '/inbox/.staging/uuid-1/a.md', originalFileName: 'a.md', receivedAt: 'now' },
+-    };
++    const job = { id: '1', data: { filePath: '/inbox/.staging/uuid-1/a.md', originalFileName: 'a.md', receivedAt: 'now' } };
+     await handler(job);
+ 
+     expect(rmdir).toHaveBeenCalledWith('/inbox/.staging/uuid-1');
+   });
+ });

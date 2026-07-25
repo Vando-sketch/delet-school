@@ -1,0 +1,146 @@
+# Review package: d953248..feat/ocr-quality-and-subfolder-ingest-task-1
+
+## Commits
+a0e6e12 feat: add hunspell dictionary loader for the OCR-quality gate
+
+## Files changed
+ .env.example                    |  6 ++++++
+ src/config/index.ts             |  4 ++++
+ src/extract/dictionary.ts       | 40 ++++++++++++++++++++++++++++++++++++++++
+ test/extract/dictionary.test.ts | 40 ++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 90 insertions(+)
+
+## Diff
+diff --git a/.env.example b/.env.example
+index 3fefefc..1901f51 100644
+--- a/.env.example
++++ b/.env.example
+@@ -59,10 +59,16 @@ PDFTOPPM_BIN=pdftoppm
+ PDFINFO_BIN=pdfinfo
+ OCRMYPDF_BIN=ocrmypdf
+ OCR_LANGUAGES=deu+eng
+ MARKITDOWN_BIN=/app/.venv/bin/markitdown
+ 
+ # Solution-PDF generation (pandoc + weasyprint)
+ PANDOC_BIN=pandoc
+ PANDOC_TEMPLATE_PATH=/app/vorlage/template.html
+ PANDOC_CSS_PATH=/app/vorlage/style.css
+ WEASYPRINT_BIN=/app/.venv/bin/weasyprint
++
++# Dictionaries for the OCR-quality gate's real-word check (src/extract/dictionary.ts) -
++# installed via apt (hunspell-de-de, hunspell-en-us) at these standard Debian paths in the
++# Docker image; only need overriding for local (non-Docker) runs.
++HUNSPELL_DE_DIC_PATH=/usr/share/hunspell/de_DE.dic
++HUNSPELL_EN_DIC_PATH=/usr/share/hunspell/en_US.dic
+diff --git a/src/config/index.ts b/src/config/index.ts
+index f250d59..9f8e7d9 100644
+--- a/src/config/index.ts
++++ b/src/config/index.ts
+@@ -72,11 +72,15 @@ export const config = {
+   },
+   markitdown: {
+     binary: optional('MARKITDOWN_BIN', '/app/.venv/bin/markitdown'),
+   },
+   pandoc: {
+     binary: optional('PANDOC_BIN', 'pandoc'),
+     templatePath: optional('PANDOC_TEMPLATE_PATH', '/app/vorlage/template.html'),
+     cssPath: optional('PANDOC_CSS_PATH', '/app/vorlage/style.css'),
+     weasyprintBinary: optional('WEASYPRINT_BIN', '/app/.venv/bin/weasyprint'),
+   },
++  dictionary: {
++    deDicPath: optional('HUNSPELL_DE_DIC_PATH', '/usr/share/hunspell/de_DE.dic'),
++    enDicPath: optional('HUNSPELL_EN_DIC_PATH', '/usr/share/hunspell/en_US.dic'),
++  },
+ };
+diff --git a/src/extract/dictionary.ts b/src/extract/dictionary.ts
+new file mode 100644
+index 0000000..c3a9792
+--- /dev/null
++++ b/src/extract/dictionary.ts
+@@ -0,0 +1,40 @@
++import { readFileSync } from 'node:fs';
++import { config } from '../config/index.js';
++import { FACH_KEYS } from '../fach.js';
++
++export type WordValidator = (word: string) => boolean;
++
++// Subject codes and legal-citation abbreviations are expected, legitimate vocabulary in this
++// document domain but won't appear in a general dictionary.
++const DOMAIN_WHITELIST = [...FACH_KEYS.map((key) => key.toLowerCase()), 'bgb', 'lf', 'gg', 'stgb', 'hgb'];
++
++export interface LoadWordSetDeps {
++  readFileSync?: (path: string) => string;
++  dicPaths?: string[];
++}
++
++/**
++ * Parses hunspell .dic files (plain `word/AFFIXFLAGS` lines, first line is a word count) into
++ * a flat Set - affix rules are irrelevant here, this is a coarse "known word" lookup, not a
++ * spellchecker, so inflected forms not listed verbatim in the .dic file are undercounted. That
++ * is an accepted tradeoff given the dictionary ratio's 0.45 threshold (see pdfText.ts).
++ */
++export function loadWordSet(deps: LoadWordSetDeps = {}): Set<string> {
++  const read = deps.readFileSync ?? ((path: string) => readFileSync(path, 'utf-8'));
++  const dicPaths = deps.dicPaths ?? [config.dictionary.deDicPath, config.dictionary.enDicPath];
++
++  const words = new Set<string>(DOMAIN_WHITELIST);
++  for (const dicPath of dicPaths) {
++    const contents = read(dicPath);
++    const lines = contents.split('\n').slice(1); // first line is hunspell's word count
++    for (const line of lines) {
++      const word = line.split('/')[0]?.trim().toLowerCase();
++      if (word) words.add(word);
++    }
++  }
++  return words;
++}
++
++export function buildWordValidator(words: Set<string>): WordValidator {
++  return (word: string) => words.has(word.toLowerCase());
++}
+diff --git a/test/extract/dictionary.test.ts b/test/extract/dictionary.test.ts
+new file mode 100644
+index 0000000..aa8db80
+--- /dev/null
++++ b/test/extract/dictionary.test.ts
+@@ -0,0 +1,40 @@
++import { describe, expect, it } from 'vitest';
++import { buildWordValidator, loadWordSet } from '../../src/extract/dictionary.js';
++
++describe('loadWordSet', () => {
++  it('parses word/affix-flag lines into a lowercase Set, skipping the hunspell word-count header line', () => {
++    const fakeFiles: Record<string, string> = {
++      '/fake/de.dic': '3\nKaufvertrag/S\nMangel\nHaus/PLe',
++      '/fake/en.dic': '1\nContract',
++    };
++    const readFileSync = (path: string) => {
++      const contents = fakeFiles[path];
++      if (contents === undefined) throw new Error(`unexpected path: ${path}`);
++      return contents;
++    };
++
++    const words = loadWordSet({ readFileSync, dicPaths: ['/fake/de.dic', '/fake/en.dic'] });
++
++    expect(words.has('kaufvertrag')).toBe(true);
++    expect(words.has('mangel')).toBe(true);
++    expect(words.has('haus')).toBe(true);
++    expect(words.has('contract')).toBe(true);
++  });
++
++  it('includes the domain whitelist (Fach codes and legal abbreviations)', () => {
++    const readFileSync = () => '0\n';
++    const words = loadWordSet({ readFileSync, dicPaths: ['/fake/empty.dic'] });
++
++    expect(words.has('bgwp')).toBe(true);
++    expect(words.has('bgb')).toBe(true);
++  });
++});
++
++describe('buildWordValidator', () => {
++  it('looks up words case-insensitively', () => {
++    const isRealWord = buildWordValidator(new Set(['kaufvertrag']));
++    expect(isRealWord('Kaufvertrag')).toBe(true);
++    expect(isRealWord('KAUFVERTRAG')).toBe(true);
++    expect(isRealWord('unknownword')).toBe(false);
++  });
++});

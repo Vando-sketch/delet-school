@@ -1,7 +1,8 @@
+import os from 'node:os';
 import { extname } from 'node:path';
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { getPageText, getPdfPageCount, getPagesWithContentImages, isQualityText } from './pdfText.js';
+import { getAllPagesText, getPageText, getPdfPageCount, getPagesWithContentImages, isQualityText } from './pdfText.js';
 import { ocrPdf } from './ocr.js';
 import { convertToMarkdown } from './markitdown.js';
 import { renderPageToPng } from './renderPage.js';
@@ -10,6 +11,7 @@ import type { ExtractionResult, VisionPage } from '../types.js';
 export interface ExtractDeps {
   getPdfPageCount?: typeof getPdfPageCount;
   getPageText?: typeof getPageText;
+  getAllPagesText?: typeof getAllPagesText;
   isQualityText?: typeof isQualityText;
   ocrPdf?: typeof ocrPdf;
   convertToMarkdown?: typeof convertToMarkdown;
@@ -22,6 +24,30 @@ export const TEXT_EXTENSIONS = new Set(['.txt', '.md']);
 // entirely and goes straight through MarkItDown, same as a text-layer PDF's markdown step.
 export const MARKITDOWN_DIRECT_EXTENSIONS = new Set(['.docx']);
 
+async function mapConcurrent<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      const item = items[currentIndex];
+      if (item !== undefined) {
+        results[currentIndex] = await fn(item, currentIndex);
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 export async function extractFile(
   filePath: string,
   workDir: string,
@@ -29,6 +55,9 @@ export async function extractFile(
 ): Promise<ExtractionResult> {
   const getPageCount = deps.getPdfPageCount ?? getPdfPageCount;
   const getText = deps.getPageText ?? getPageText;
+  const getAllTexts =
+    deps.getAllPagesText ??
+    ((path: string, count: number) => getAllPagesText(path, count, undefined, getText));
   const checkQuality = deps.isQualityText ?? isQualityText;
   const runOcr = deps.ocrPdf ?? ocrPdf;
   const toMarkdown = deps.convertToMarkdown ?? convertToMarkdown;
@@ -62,7 +91,7 @@ export async function extractFile(
   const pageCount = await getPageCount(filePath);
   const pageNumbers = Array.from({ length: pageCount }, (_, i) => i + 1);
 
-  const originalTexts = await Promise.all(pageNumbers.map((page) => getText(filePath, page)));
+  const originalTexts = await getAllTexts(filePath, pageCount);
   const pagesWithImages = await getPagesWithImages(filePath).catch(() => new Set<number>());
 
   const pageNeedsOcr = (i: number) => {
@@ -82,7 +111,7 @@ export async function extractFile(
     await runOcr(filePath, ocrOutputPath);
     workingPdfPath = ocrOutputPath;
     ranOcr = true;
-    pageTexts = await Promise.all(pageNumbers.map((page) => getText(ocrOutputPath, page)));
+    pageTexts = await getAllTexts(ocrOutputPath, pageCount);
   }
 
   const visionPageNumbers = pageNumbers.filter(
@@ -90,11 +119,20 @@ export async function extractFile(
   );
   const markdown = await toMarkdown(workingPdfPath);
 
-  const visionPages: VisionPage[] = [];
-  for (const pageNumber of visionPageNumbers) {
-    const imagePath = await renderPage(workingPdfPath, pageNumber, path.join(workDir, 'vision-pages'));
-    visionPages.push({ pageNumber, imagePath });
-  }
+  const envConcurrency = Number(process.env.MAX_CONCURRENT_PAGE_RENDERS);
+  const concurrency =
+    !isNaN(envConcurrency) && envConcurrency > 0
+      ? envConcurrency
+      : Math.min(4, Math.max(1, os.cpus().length));
+
+  const visionPages: VisionPage[] = await mapConcurrent(
+    visionPageNumbers,
+    concurrency,
+    async (pageNumber) => {
+      const imagePath = await renderPage(workingPdfPath, pageNumber, path.join(workDir, 'vision-pages'));
+      return { pageNumber, imagePath };
+    },
+  );
 
   return {
     markdown,

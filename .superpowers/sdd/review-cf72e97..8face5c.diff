@@ -1,0 +1,135 @@
+# Review package: cf72e97104dc0cd7dd042c94f24bbf35d576e823..HEAD
+
+## Commits
+8face5c feat: add pandoc template and Style E stylesheet for solution PDFs
+
+## Files changed
+ docker/vorlage/style.css     | 95 ++++++++++++++++++++++++++++++++++++++++++++
+ docker/vorlage/template.html | 17 ++++++++
+ 2 files changed, 112 insertions(+)
+
+## Diff
+diff --git a/docker/vorlage/style.css b/docker/vorlage/style.css
+new file mode 100644
+index 0000000..3f2b961
+--- /dev/null
++++ b/docker/vorlage/style.css
+@@ -0,0 +1,95 @@
++/* docker/vorlage/style.css */
++body {
++  font-family: Georgia, 'Tinos', 'Liberation Serif', serif;
++  color: #1a1a1a;
++  margin: 2.5cm 2cm;
++}
++
++.doc-header {
++  text-align: center;
++  border-bottom: 2px solid #1a1a1a;
++  padding-bottom: 12px;
++  margin-bottom: 20px;
++}
++
++.doc-header__fach {
++  font-family: 'Liberation Sans', sans-serif;
++  font-size: 11px;
++  letter-spacing: 1px;
++  text-transform: uppercase;
++  color: #555;
++}
++
++.doc-header__title {
++  font-size: 21px;
++  font-weight: bold;
++  margin-top: 4px;
++}
++
++.doc-header__meta {
++  font-family: 'Liberation Sans', sans-serif;
++  font-size: 11px;
++  color: #777;
++  margin-top: 6px;
++}
++
++.task {
++  border: 1px solid #e3e3e3;
++  border-radius: 6px;
++  padding: 16px 16px 16px 14px;
++  margin-bottom: 14px;
++  page-break-inside: avoid;
++}
++
++.task h2 {
++  font-size: 15px;
++  margin: 0 0 10px 0;
++}
++
++.frage,
++.antwort {
++  border-left: 2px solid;
++  padding-left: 10px;
++  margin-bottom: 12px;
++}
++
++.frage {
++  border-left-color: #8892b0;
++  font-style: italic;
++  color: #333;
++  font-size: 13px;
++}
++
++.antwort {
++  border-left-color: #2f6b45;
++  font-size: 13.5px;
++  line-height: 1.6;
++}
++
++.frage::before,
++.antwort::before {
++  display: block;
++  font-family: 'Liberation Sans', sans-serif;
++  font-size: 9.5px;
++  font-weight: 700;
++  letter-spacing: 1.2px;
++  text-transform: uppercase;
++  margin-bottom: 3px;
++}
++
++.frage::before {
++  content: 'Frage';
++  color: #8892b0;
++}
++
++.antwort::before {
++  content: 'Antwort';
++  color: #2f6b45;
++}
++
++.quelle {
++  font-family: 'Liberation Sans', sans-serif;
++  font-size: 11px;
++  color: #888;
++  padding-left: 10px;
++}
+diff --git a/docker/vorlage/template.html b/docker/vorlage/template.html
+new file mode 100644
+index 0000000..abd1517
+--- /dev/null
++++ b/docker/vorlage/template.html
+@@ -0,0 +1,17 @@
++<!DOCTYPE html>
++<html lang="$lang$">
++<head>
++<meta charset="utf-8">
++<title>$title$</title>
++</head>
++<body>
++<header class="doc-header">
++  <div class="doc-header__fach">$fach$$if(lernfeld)$ · $lernfeld$$endif$</div>
++  <div class="doc-header__title">$thema$</div>
++  <div class="doc-header__meta">$name$ · $klasse$ · $datum$</div>
++</header>
++<main>
++$body$
++</main>
++</body>
++</html>

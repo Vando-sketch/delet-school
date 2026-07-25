@@ -1,0 +1,62 @@
+# Review package: 674ed900c5775c04e9c937441721aba93f5abc25..HEAD
+
+## Commits
+5844ff6 feat: add ocrmypdf wrapper for scanned-PDF extraction
+
+## Files changed
+ src/extract/ocr.ts       | 18 ++++++++++++++++++
+ test/extract/ocr.test.ts | 21 +++++++++++++++++++++
+ 2 files changed, 39 insertions(+)
+
+## Diff
+diff --git a/src/extract/ocr.ts b/src/extract/ocr.ts
+new file mode 100644
+index 0000000..2a14cf9
+--- /dev/null
++++ b/src/extract/ocr.ts
+@@ -0,0 +1,18 @@
++import { config } from '../config/index.js';
++import { defaultExecFile, type ExecFileFn } from '../lib/execFile.js';
++
++export async function ocrPdf(
++  inputPath: string,
++  outputPath: string,
++  execFile: ExecFileFn = defaultExecFile,
++): Promise<void> {
++  await execFile(config.ocr.binary, [
++    '-l',
++    config.ocr.languages,
++    '--deskew',
++    '--rotate-pages',
++    '--skip-text',
++    inputPath,
++    outputPath,
++  ]);
++}
+diff --git a/test/extract/ocr.test.ts b/test/extract/ocr.test.ts
+new file mode 100644
+index 0000000..073f2f8
+--- /dev/null
++++ b/test/extract/ocr.test.ts
+@@ -0,0 +1,21 @@
++import { describe, expect, it } from 'vitest';
++import { ocrPdf } from '../../src/extract/ocr.js';
++
++describe('ocrPdf', () => {
++  it('invokes ocrmypdf with the expected flags and paths', async () => {
++    const calls: Array<{ file: string; args: readonly string[] }> = [];
++    const execFile = async (file: string, args: readonly string[]) => {
++      calls.push({ file, args });
++      return { stdout: '', stderr: '' };
++    };
++
++    await ocrPdf('/tmp/in.pdf', '/tmp/out.pdf', execFile);
++
++    expect(calls).toEqual([
++      {
++        file: 'ocrmypdf',
++        args: ['-l', 'deu+eng', '--deskew', '--rotate-pages', '--skip-text', '/tmp/in.pdf', '/tmp/out.pdf'],
++      },
++    ]);
++  });
++});
