@@ -10,7 +10,7 @@ import { getFileJobQueue, type FileJobData, type SiblingManifestEntry } from '..
 import { createTaildropDrain } from './taildropDrain.js';
 import { buildSiblingManifest } from './siblingManifest.js';
 import { renameOrCopy } from '../lib/renameOrCopy.js';
-import { computeFileHash, isHashSeen, recordHash } from './dedup.js';
+import { computeFileHash, claimHash } from './dedup.js';
 
 const logger = pino({ name: 'ingest-watcher' });
 
@@ -35,12 +35,11 @@ async function enqueueFile(
   batch?: { batchId: string; siblingManifest: SiblingManifestEntry[] },
 ): Promise<void> {
   const hash = await computeFileHash(filePath);
-  if (await isHashSeen(hash)) {
+  if (!(await claimHash(hash))) {
     logger.info({ filePath, originalFileName, hash }, '[ingest] Duplicate file detected via SHA-256 hash...');
     await archiveFile(watchDir, filePath, config.ingest.processedDirName);
     return;
   }
-  await recordHash(hash);
 
   const jobData: FileJobData = {
     filePath,

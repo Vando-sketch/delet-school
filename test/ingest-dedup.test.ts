@@ -8,15 +8,12 @@ let redisShouldFail = false;
 
 const mockRedis = {
   status: 'ready',
-  sismember: vi.fn().mockImplementation(async (key: string, member: string) => {
-    if (redisShouldFail) {
-      throw new Error('Redis connection failed');
-    }
-    return mockRedisSet.has(member) ? 1 : 0;
-  }),
   sadd: vi.fn().mockImplementation(async (key: string, member: string) => {
     if (redisShouldFail) {
       throw new Error('Redis connection failed');
+    }
+    if (mockRedisSet.has(member)) {
+      return 0;
     }
     mockRedisSet.add(member);
     return 1;
@@ -34,7 +31,7 @@ vi.mock('../src/queue/index.js', () => ({
   getRedisConnection: () => mockRedis,
 }));
 
-import { computeFileHash, isHashSeen, recordHash, resetLocalHashCache } from '../src/ingest/dedup.js';
+import { computeFileHash, claimHash, resetLocalHashCache } from '../src/ingest/dedup.js';
 
 describe('Content Deduplication Module (dedup)', () => {
   let tmpDir: string;
@@ -59,40 +56,48 @@ describe('Content Deduplication Module (dedup)', () => {
     expect(hash1).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it('identifies unseen hash and records seen hash', async () => {
+  it('claims an unseen hash (returns true) and rejects it on a later call (returns false)', async () => {
     const hash = await computeFileHash(testFilePath);
-    expect(await isHashSeen(hash)).toBe(false);
-
-    await recordHash(hash);
-    expect(await isHashSeen(hash)).toBe(true);
+    expect(await claimHash(hash)).toBe(true);
+    expect(await claimHash(hash)).toBe(false);
     expect(mockRedis.sadd).toHaveBeenCalledWith('delet_school:processed_hashes', hash);
   });
 
   it('resets local hash cache when resetLocalHashCache is called', async () => {
     redisShouldFail = true; // Isolate local memory cache testing
     const hash = 'a'.repeat(64);
-    await recordHash(hash);
-    expect(await isHashSeen(hash)).toBe(true);
+    expect(await claimHash(hash)).toBe(true);
+    expect(await claimHash(hash)).toBe(false);
 
-    resetLocalHashCache();
-    expect(await isHashSeen(hash)).toBe(false);
+    await resetLocalHashCache();
+    expect(await claimHash(hash)).toBe(true);
   });
 
-  it('falls back to local Set when Redis throws an error', async () => {
+  it('falls back to local claim when Redis throws an error', async () => {
     const hash = await computeFileHash(testFilePath);
     redisShouldFail = true;
 
-    // Should record in local cache despite Redis error
-    await recordHash(hash);
-    expect(await isHashSeen(hash)).toBe(true);
+    expect(await claimHash(hash)).toBe(true);
+    expect(await claimHash(hash)).toBe(false);
   });
 
-  it('checks Redis set when hash is not in local cache', async () => {
+  it('rejects a hash already present in Redis, even if not seen locally yet', async () => {
     const hash = 'b'.repeat(64);
-    mockRedisSet.add(hash); // Pre-populate Redis set
+    mockRedisSet.add(hash); // Pre-populate Redis set, simulating another worker's claim
 
-    expect(await isHashSeen(hash)).toBe(true);
-    expect(mockRedis.sismember).toHaveBeenCalledWith('delet_school:processed_hashes', hash);
+    expect(await claimHash(hash)).toBe(false);
+    expect(mockRedis.sadd).toHaveBeenCalledWith('delet_school:processed_hashes', hash);
+  });
+
+  it('only lets one caller claim a hash when two calls race concurrently in the same process', async () => {
+    const hash = await computeFileHash(testFilePath);
+
+    // Simulates two near-simultaneous 'add' events for identical file content (e.g. a batch
+    // drop) racing through claimHash before either has finished - the bug this replaces:
+    // isHashSeen()-then-recordHash() as two separate calls let both callers observe "unseen".
+    const [first, second] = await Promise.all([claimHash(hash), claimHash(hash)]);
+
+    const claims = [first, second].filter(Boolean);
+    expect(claims).toHaveLength(1);
   });
 });
-
