@@ -114,7 +114,7 @@ describe('Near-duplicate detection module (nearDup)', () => {
       'Berechne die Ableitung der Funktion f(x) = 3x^2 + 2x - 5 und bestimme die Nullstellen.';
 
     it('returns unique when the signature store is empty', async () => {
-      const verdict = await checkNearDuplicate(baseText);
+      const verdict = await checkNearDuplicate(baseText, 'new-doc.pdf');
 
       expect(verdict.tier).toBe('unique');
       expect(verdict.distance).toBeNull();
@@ -122,7 +122,7 @@ describe('Near-duplicate detection module (nearDup)', () => {
     });
 
     it('unconditionally records the new signature even on an empty store', async () => {
-      await checkNearDuplicate(baseText);
+      await checkNearDuplicate(baseText, 'new-doc.pdf');
 
       expect(mockRedis.hset).toHaveBeenCalledTimes(1);
       expect(mockRedisStore.size).toBe(1);
@@ -131,6 +131,17 @@ describe('Near-duplicate detection module (nearDup)', () => {
       expect(record).toHaveProperty('simhash');
       expect(record).toHaveProperty('originalFileName');
       expect(record).toHaveProperty('recordedAt');
+    });
+
+    it("records the new document's own originalFileName so a later near-duplicate names it", async () => {
+      await checkNearDuplicate(baseText, 'worksheet-a.pdf');
+
+      const noisyDuplicate =
+        'berechne die ableitung der funktion f x  3x^2 2x 5 und bestimme die nullstellen';
+      const verdict = await checkNearDuplicate(noisyDuplicate, 'worksheet-b.pdf');
+
+      expect(verdict.tier).toBe('duplicate');
+      expect(verdict.matchedFile).toBe('worksheet-a.pdf');
     });
 
     it('classifies as duplicate when a stored signature is within skipDistance', async () => {
@@ -145,7 +156,7 @@ describe('Near-duplicate detection module (nearDup)', () => {
       const noisyDuplicate =
         'berechne die ableitung der funktion f x  3x^2 2x 5 und bestimme die nullstellen';
 
-      const verdict = await checkNearDuplicate(noisyDuplicate);
+      const verdict = await checkNearDuplicate(noisyDuplicate, 'new-doc.pdf');
 
       expect(verdict.tier).toBe('duplicate');
       expect(verdict.distance).not.toBeNull();
@@ -166,7 +177,7 @@ describe('Near-duplicate detection module (nearDup)', () => {
         recordedAt: new Date().toISOString(),
       }));
 
-      const verdict = await checkNearDuplicate(baseText);
+      const verdict = await checkNearDuplicate(baseText, 'new-doc.pdf');
 
       expect(verdict.tier).toBe('flagged');
       expect(verdict.distance).toBe(6);
@@ -184,7 +195,7 @@ describe('Near-duplicate detection module (nearDup)', () => {
         recordedAt: new Date().toISOString(),
       }));
 
-      const verdict = await checkNearDuplicate(baseText);
+      const verdict = await checkNearDuplicate(baseText, 'new-doc.pdf');
 
       expect(verdict.tier).toBe('unique');
     });
@@ -197,7 +208,7 @@ describe('Near-duplicate detection module (nearDup)', () => {
         recordedAt: new Date().toISOString(),
       }));
 
-      await checkNearDuplicate(baseText);
+      await checkNearDuplicate(baseText, 'new-doc.pdf');
 
       // The original entry plus the newly recorded one.
       expect(mockRedisStore.size).toBe(2);
@@ -207,7 +218,7 @@ describe('Near-duplicate detection module (nearDup)', () => {
     it('fails open to unique with a null distance when Redis throws', async () => {
       redisShouldFail = true;
 
-      const verdict = await checkNearDuplicate(baseText);
+      const verdict = await checkNearDuplicate(baseText, 'new-doc.pdf');
 
       expect(verdict).toEqual({ tier: 'unique', distance: null, matchedFile: null });
     });
@@ -215,7 +226,7 @@ describe('Near-duplicate detection module (nearDup)', () => {
     it('fails open to unique with a null distance when Redis is not ready', async () => {
       redisReady = false;
 
-      const verdict = await checkNearDuplicate(baseText);
+      const verdict = await checkNearDuplicate(baseText, 'new-doc.pdf');
 
       expect(verdict).toEqual({ tier: 'unique', distance: null, matchedFile: null });
       expect(mockRedis.hgetall).not.toHaveBeenCalled();

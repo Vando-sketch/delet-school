@@ -65,7 +65,7 @@ async function handleJob(job: Job<FileJobData>): Promise<void> {
     const extraction = await extractFile(filePath, workDir);
     archivalPath = extraction.archivalPdfPath;
 
-    const verdict = await checkNearDuplicate(extraction.markdown);
+    const verdict = await checkNearDuplicate(extraction.markdown, originalFileName);
 
     if (verdict.tier === 'duplicate') {
       logger.info({ jobId: job.id, matchedFile: verdict.matchedFile, distance: verdict.distance }, 'file skipped as duplicate');
