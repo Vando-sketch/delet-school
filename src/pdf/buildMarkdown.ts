@@ -3,7 +3,13 @@ import { escapeForPandoc } from './escape.js';
 import type { ProcessedFileResult, TaskSolution } from '../types.js';
 
 function escapeYamlString(text: string): string {
-  return text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  // Collapse C0 control chars (newlines, tabs, etc.) to spaces first: a raw newline in model-
+  // authored `thema`/`lernfeld` would break the single-line double-quoted YAML scalar these
+  // values are interpolated into and fail the pandoc render. Then escape backslash and quote.
+  return text
+    .replace(/[\x00-\x1F]/g, ' ')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
 }
 
 function buildFrontmatter(result: ProcessedFileResult, datum: string): string {

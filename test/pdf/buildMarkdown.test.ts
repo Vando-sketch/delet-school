@@ -41,6 +41,13 @@ describe('buildSolutionMarkdown', () => {
     expect(md).toContain('datum: "2026-07-23"');
   });
 
+  it('neutralizes control characters in frontmatter fields so the YAML scalar stays on one line', () => {
+    const md = buildSolutionMarkdown(makeResult({ thema: 'Bruch\nrechnung\tteil' }), '2026-07-23');
+    const frontmatter = md.slice(0, md.indexOf('\n---', 3) + 4);
+    expect(frontmatter).not.toMatch(/thema: "[^"]*[\n\t]/);
+    expect(frontmatter).toContain('thema: "Bruch rechnung teil – Lösungen"');
+  });
+
   it('omits the lernfeld frontmatter line when not present', () => {
     const md = buildSolutionMarkdown(makeResult(), '2026-07-23');
     expect(md).not.toContain('lernfeld:');
