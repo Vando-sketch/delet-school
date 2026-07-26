@@ -1,18 +1,9 @@
 import 'dotenv/config';
 
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
 function optional(name: string, fallback: string): string {
-  // Treat an empty-string env var the same as an unset one (consistent with `required()`'s
-  // `if (!value)` check below). Checked-in .env templates commonly leave optional keys
-  // present but blank (e.g. `ANTHROPIC_MODEL=`) - `??` alone would take that literal '' as
-  // the value and silently defeat the documented default.
+  // Treat an empty-string env var the same as an unset one. Checked-in .env templates commonly
+  // leave optional keys present but blank (e.g. `ANTHROPIC_MODEL=`) - `??` alone would take that
+  // literal '' as the value and silently defeat the documented default.
   const value = process.env[name];
   return value ? value : fallback;
 }
@@ -89,10 +80,10 @@ export const config = {
     enDicPath: optional('HUNSPELL_EN_DIC_PATH', '/usr/share/hunspell/en_US.dic'),
   },
   agy: {
-    pass1Model: optional('PASS1_MODEL', 'gemini-3.5-flash'),
-    pass1Effort: optional('PASS1_EFFORT', 'low'),
-    pass2Model: optional('PASS2_MODEL', 'gemini-3.5-flash'),
-    pass2Effort: optional('PASS2_EFFORT', 'low'),
+    pass1Model: optional('PASS1_MODEL', 'gemini-3.6-flash'),
+    pass1Effort: optional('PASS1_EFFORT', 'medium'),
+    pass2Model: optional('PASS2_MODEL', 'gemini-3.1-pro'),
+    pass2Effort: optional('PASS2_EFFORT', 'high'),
     printTimeout: optional('AGY_PRINT_TIMEOUT', '5m'),
     binary: optional('AGY_BIN', 'agy'),
   },

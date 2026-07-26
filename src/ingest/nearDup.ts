@@ -120,7 +120,7 @@ export function hammingDistance(a: bigint, b: bigint): number {
  * and returns `{ tier: 'unique', distance: null, matchedFile: null }`, treating this as a
  * secondary, best-effort signal that must never block a real submission from being processed.
  */
-export async function checkNearDuplicate(markdown: string): Promise<NearDupVerdict> {
+export async function checkNearDuplicate(markdown: string, originalFileName: string): Promise<NearDupVerdict> {
   const fingerprint = simhash(normalizeText(markdown));
 
   try {
@@ -151,7 +151,7 @@ export async function checkNearDuplicate(markdown: string): Promise<NearDupVerdi
 
     const newRecord: SignatureRecord = {
       simhash: fingerprint.toString(),
-      originalFileName: '',
+      originalFileName,
       recordedAt: new Date().toISOString(),
     };
     await redis.hset(REDIS_HASH_KEY, crypto.randomUUID(), JSON.stringify(newRecord));

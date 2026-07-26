@@ -555,7 +555,7 @@ describe('createFileProcessor', () => {
 
 describe('Pass 2 Schema and Validation for hintergrundKontext', () => {
   it('includes hintergrundKontext in PASS2_JSON_SCHEMA properties', () => {
-    const props = (PASS2_JSON_SCHEMA as any).properties;
+    const props = (PASS2_JSON_SCHEMA as { properties: Record<string, { type: string }> }).properties;
     expect(props).toHaveProperty('hintergrundKontext');
     expect(props.hintergrundKontext.type).toBe('string');
   });
@@ -573,7 +573,7 @@ describe('Pass 2 Schema and Validation for hintergrundKontext', () => {
       ],
     });
 
-    const result = validateShapePass2(validJson as any);
+    const result = validateShapePass2(validJson);
     expect(result.hintergrundKontext).toBe('Szenario: Firma IT-Systeme AG plant ein neues Netzwerk.');
     expect(result.tasksFound).toHaveLength(1);
     expect(result.tasksFound[0].title).toBe('Aufgabe 1');
@@ -591,7 +591,7 @@ describe('Pass 2 Schema and Validation for hintergrundKontext', () => {
       ],
     });
 
-    const result = validateShapePass2(validJson as any);
+    const result = validateShapePass2(validJson);
     expect(result.hintergrundKontext).toBeUndefined();
     expect(result.tasksFound).toHaveLength(1);
   });
