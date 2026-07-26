@@ -2,7 +2,7 @@
 
 Branch: `chore/autonomous-improvement-sweep` (off `main`)
 Date: 2026-07-25 → 2026-07-26
-PR: _(see below)_
+PR: https://github.com/Vando-sketch/delet-school/pull/20 (open, not merged)
 
 ## Outcome
 
