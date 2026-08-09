@@ -51,11 +51,11 @@ describe('loadWordSet', () => {
     expect(setB.has('birne')).toBe(true);
   });
 
-  it('includes the domain whitelist (Fach codes and legal abbreviations)', () => {
+  it('includes the domain whitelist (subject codes and legal abbreviations)', () => {
     const readFileSync = () => '0\n';
     const words = loadWordSet({ readFileSync, dicPaths: ['/fake/empty.dic'] });
 
-    expect(words.has('bgwp')).toBe(true);
+    expect(words.has('math')).toBe(true);
     expect(words.has('bgb')).toBe(true);
   });
 });
