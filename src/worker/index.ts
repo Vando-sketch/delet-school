@@ -79,18 +79,18 @@ async function handleJob(job: Job<FileJobData>): Promise<void> {
     }
 
     const result = await fileProcessor.processFile(originalFileName, extraction, job.data.siblingManifest);
-    const datum = today();
+    const date = today();
 
     let content: NextcloudWriteContent;
-    if (result.isMaterialblatt) {
+    if (result.isReferenceSheet) {
       content = { kind: 'material', sourcePath: extraction.archivalPdfPath };
     } else {
-      const markdown = buildSolutionMarkdown(result, datum);
+      const markdown = buildSolutionMarkdown(result, date);
       const pdfBytes = await renderSolutionPdf(markdown);
       content = { kind: 'pdf', bytes: pdfBytes };
     }
 
-    const { writtenPath } = await nextcloudWriter.writeResult(result, content, datum);
+    const { writtenPath } = await nextcloudWriter.writeResult(result, content, date);
     await archiveFile(archivalPath, config.ingest.processedDirName);
     await removeOriginalIfArchivedElsewhere(filePath, archivalPath);
     logger.info({ jobId: job.id, writtenPath, tasksFound: result.tasksFound.length }, 'file job complete');
