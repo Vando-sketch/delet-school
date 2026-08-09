@@ -213,7 +213,7 @@ index 07ea653..bf2759a 100644
  
 -    const content = await fs.readFile(writtenPath, 'utf8');
 -    expect(content).toBe(result.summaryMarkdown);
-+    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
++    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'BGWP', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
 +    expect(writtenPath).toBe(expectedPath);
 +    expect(await fs.readFile(writtenPath)).toEqual(pdfBytes);
    });
@@ -284,7 +284,7 @@ index 07ea653..bf2759a 100644
 +    const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
  
 -    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
-+    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig');
++    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'BGWP');
      const resolvedWritten = path.resolve(writtenPath);
 -
      expect(resolvedWritten.startsWith(expectedDir + path.sep)).toBe(true);
@@ -328,6 +328,6 @@ index 07ea653..bf2759a 100644
  
      expect(calls).toHaveLength(1);
 -    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/teams-task-agent`]);
-+    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP/Grünig`]);
++    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP`]);
    });
  });

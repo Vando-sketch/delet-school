@@ -149,8 +149,8 @@ cat > /tmp/sample.md <<EOF
 lang: de
 fach: "BGWP"
 thema: "Kaufvertragsrecht – Lösungen"
-name: "Elias Helmer"
-klasse: "IT10b"
+name: "Jordan Rivera"
+klasse: "10A"
 datum: "2026-07-23"
 ---
 

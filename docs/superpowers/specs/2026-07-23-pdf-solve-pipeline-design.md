@@ -77,7 +77,7 @@ Claude solve step — CHANGED (src/claude/processFile.ts)
    near-duplicate folder names across drops), chosen over free-form/dynamic folder
    creation specifically to keep folder names predictable. Extend the table by hand
    when a new class is added:
-     BGWP → Fächer/BGWP/Grünig, Englisch → Fächer/Englisch, Deutsch → Fächer/Deutsch,
+     BGWP → Fächer/BGWP, Englisch → Fächer/Englisch, Deutsch → Fächer/Deutsch,
      IT/FU-IT → Fächer/FU-IT, AEuP → Fächer/AEuP, PuG → Fächer/PuG,
      IT-Tec → Fächer/IT-Tec, Religion → Fächer/Religion.
    If the Fach cannot be determined with reasonable confidence from either signal, the
@@ -156,7 +156,7 @@ export interface ProcessedFileResult {
 
 - `INGEST_WATCH_DIR` default: `./inbox` → `__INBOX__` (still overridable)
 - `ANTHROPIC_MODEL` default: `claude-haiku-4-5-20251001` → a Sonnet model id
-- New: `STUDENT_NAME` (e.g. "Elias Helmer"), `STUDENT_KLASSE` (e.g. "IT10b") — required,
+- New: `STUDENT_NAME` (e.g. "Jordan Rivera"), `STUDENT_KLASSE` (e.g. "10A") — required,
   same pattern as `NEXTCLOUD_TARGET_USER`
 - New: extraction-stage tunables as needed (e.g. OCR languages, MarkItDown invocation
   path) — exact env surface to be finalized during implementation planning

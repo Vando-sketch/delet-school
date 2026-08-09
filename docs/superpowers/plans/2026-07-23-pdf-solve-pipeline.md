@@ -149,8 +149,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const REQUIRED_ENV = {
   NEXTCLOUD_DATA_DIR: '/data',
   NEXTCLOUD_TARGET_USER: 'alice',
-  STUDENT_NAME: 'Elias Helmer',
-  STUDENT_KLASSE: 'IT10b',
+  STUDENT_NAME: 'Jordan Rivera',
+  STUDENT_KLASSE: '10A',
 };
 
 describe('config defaults', () => {
@@ -179,8 +179,8 @@ describe('config defaults', () => {
 
   it('exposes required STUDENT_NAME / STUDENT_KLASSE', async () => {
     const { config } = await import('../src/config/index.js');
-    expect(config.student.name()).toBe('Elias Helmer');
-    expect(config.student.klasse()).toBe('IT10b');
+    expect(config.student.name()).toBe('Jordan Rivera');
+    expect(config.student.klasse()).toBe('10A');
   });
 });
 ```
@@ -216,7 +216,7 @@ export type FachKey = (typeof FACH_KEYS)[number];
  * see docs/superpowers/specs/2026-07-23-pdf-solve-pipeline-design.md.
  */
 export const FACH_SUBPATH: Record<FachKey, string> = {
-  BGWP: 'BGWP/Grünig',
+  BGWP: 'BGWP',
   Englisch: 'Englisch',
   Deutsch: 'Deutsch',
   IT: 'FU-IT',
@@ -1242,8 +1242,8 @@ cat > /tmp/sample.md <<EOF
 lang: de
 fach: "BGWP"
 thema: "Kaufvertragsrecht – Lösungen"
-name: "Elias Helmer"
-klasse: "IT10b"
+name: "Jordan Rivera"
+klasse: "10A"
 datum: "2026-07-23"
 ---
 
@@ -1310,8 +1310,8 @@ function makeResult(overrides: Partial<ProcessedFileResult> = {}): ProcessedFile
 
 describe('buildSolutionMarkdown', () => {
   beforeEach(() => {
-    process.env.STUDENT_NAME = 'Elias Helmer';
-    process.env.STUDENT_KLASSE = 'IT10b';
+    process.env.STUDENT_NAME = 'Jordan Rivera';
+    process.env.STUDENT_KLASSE = '10A';
   });
 
   afterEach(() => {
@@ -1324,8 +1324,8 @@ describe('buildSolutionMarkdown', () => {
 
     expect(md).toContain('fach: "BGWP"');
     expect(md).toContain('thema: "Kaufvertragsrecht – Lösungen"');
-    expect(md).toContain('name: "Elias Helmer"');
-    expect(md).toContain('klasse: "IT10b"');
+    expect(md).toContain('name: "Jordan Rivera"');
+    expect(md).toContain('klasse: "10A"');
     expect(md).toContain('datum: "2026-07-23"');
   });
 
@@ -2112,7 +2112,7 @@ describe('createNextcloudWriter().writeResult', () => {
 
     const { writtenPath } = await writer.writeResult(makeResult(), { kind: 'pdf', bytes: pdfBytes }, '2026-07-23');
 
-    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
+    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'BGWP', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
     expect(writtenPath).toBe(expectedPath);
     expect(await fs.readFile(writtenPath)).toEqual(pdfBytes);
   });
@@ -2162,7 +2162,7 @@ describe('createNextcloudWriter().writeResult', () => {
 
     const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig');
+    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'BGWP');
     const resolvedWritten = path.resolve(writtenPath);
     expect(resolvedWritten.startsWith(expectedDir + path.sep)).toBe(true);
     expect(resolvedWritten).not.toContain('..');
@@ -2190,7 +2190,7 @@ describe('createNextcloudWriter().writeResult', () => {
     await writer.writeResult(makeResult(), { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP/Grünig`]);
+    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP`]);
   });
 });
 ```
@@ -2385,7 +2385,7 @@ describe('worker pipeline', () => {
     processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
     buildSolutionMarkdown.mockReturnValue('# solution markdown');
     renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
-    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf' });
+    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/arbeitsblatt1_Loesung_2026-07-23.pdf' });
 
     const { createFileJobWorker } = await import('../src/worker/index.js');
     const { Worker } = await import('bullmq');

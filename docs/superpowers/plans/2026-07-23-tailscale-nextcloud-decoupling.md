@@ -75,8 +75,8 @@ const REQUIRED_ENV = {
   NEXTCLOUD_BASE_URL: 'https://nextcloud.example.ts.net',
   NEXTCLOUD_USERNAME: 'alice',
   NEXTCLOUD_APP_PASSWORD: 'app-password',
-  STUDENT_NAME: 'Elias Helmer',
-  STUDENT_KLASSE: 'IT10b',
+  STUDENT_NAME: 'Jordan Rivera',
+  STUDENT_KLASSE: '10A',
 };
 
 describe('config defaults', () => {
@@ -107,8 +107,8 @@ describe('config defaults', () => {
 
   it('exposes required STUDENT_NAME / STUDENT_KLASSE', async () => {
     const { config } = await import('../src/config/index.js');
-    expect(config.student.name()).toBe('Elias Helmer');
-    expect(config.student.klasse()).toBe('IT10b');
+    expect(config.student.name()).toBe('Jordan Rivera');
+    expect(config.student.klasse()).toBe('10A');
   });
 
   it('exposes required Nextcloud WebDAV settings', async () => {
@@ -290,8 +290,8 @@ describe('createNextcloudWriter().writeResult', () => {
 
     const { writtenPath } = await writer.writeResult(makeResult(), { kind: 'pdf', bytes: pdfBytes }, '2026-07-23');
 
-    expect(writtenPath).toBe('/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf');
-    expect(client.createDirectory).toHaveBeenCalledWith('/Fächer/BGWP/Grünig', { recursive: true });
+    expect(writtenPath).toBe('/Fächer/BGWP/arbeitsblatt1_Loesung_2026-07-23.pdf');
+    expect(client.createDirectory).toHaveBeenCalledWith('/Fächer/BGWP', { recursive: true });
     expect(client.putFileContents).toHaveBeenCalledWith(writtenPath, pdfBytes);
   });
 
@@ -339,7 +339,7 @@ describe('createNextcloudWriter().writeResult', () => {
 
     const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    expect(writtenPath.startsWith('/Fächer/BGWP/Grünig/')).toBe(true);
+    expect(writtenPath.startsWith('/Fächer/BGWP/')).toBe(true);
     expect(writtenPath).not.toContain('..');
   });
 

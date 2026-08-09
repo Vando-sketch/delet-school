@@ -2,7 +2,7 @@
 
 ## Implementation Summary
 
-Successfully rewrote `/Users/elias/Programms/delet-school/docker/Dockerfile` to switch from Alpine to Debian slim base image and added the complete PDF/OCR/extraction toolchain required for the teams-task-agent pipeline.
+Successfully rewrote `docker/Dockerfile` to switch from Alpine to Debian slim base image and added the complete PDF/OCR/extraction toolchain required for the teams-task-agent pipeline.
 
 ## Dockerfile Changes
 
