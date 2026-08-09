@@ -34,9 +34,9 @@ describe('renderSolutionPdf', () => {
     expect(call?.args).toEqual([
       writeCalls[0]?.path,
       '--template',
-      './docker/vorlage/template.html',
+      './docker/template/template.html',
       '--css',
-      './docker/vorlage/style.css',
+      './docker/template/style.css',
       '--pdf-engine',
       './.venv/bin/weasyprint',
       '-o',
