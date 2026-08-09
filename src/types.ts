@@ -1,19 +1,17 @@
-import type { FachKey } from './fach.js';
-
 export interface TaskSolution {
   title: string;
   taskDescription: string;
   proposedSolution: string;
-  quelle?: string;
+  source?: string;
 }
 
 export interface ProcessedFileResult {
   originalFileName: string;
-  isMaterialblatt: boolean;
-  fach: FachKey;
-  lernfeld?: string;
-  thema: string;
-  hintergrundKontext?: string;
+  isReferenceSheet: boolean;
+  subject: string;
+  module?: string;
+  topic: string;
+  backgroundContext?: string;
   tasksFound: TaskSolution[];
 }
 
@@ -49,6 +47,6 @@ export interface NextcloudWriter {
   writeResult(
     result: ProcessedFileResult,
     content: NextcloudWriteContent,
-    datum: string,
+    date: string,
   ): Promise<{ writtenPath: string }>;
 }
