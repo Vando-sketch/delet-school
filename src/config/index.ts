@@ -74,8 +74,8 @@ export const config = {
   },
   pandoc: {
     binary: optional('PANDOC_BIN', 'pandoc'),
-    templatePath: optional('PANDOC_TEMPLATE_PATH', './docker/vorlage/template.html'),
-    cssPath: optional('PANDOC_CSS_PATH', './docker/vorlage/style.css'),
+    templatePath: optional('PANDOC_TEMPLATE_PATH', './docker/template/template.html'),
+    cssPath: optional('PANDOC_CSS_PATH', './docker/template/style.css'),
     weasyprintBinary: optional('WEASYPRINT_BIN', './.venv/bin/weasyprint'),
   },
   dictionary: {

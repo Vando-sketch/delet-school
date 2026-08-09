@@ -1,0 +1,18 @@
+<!-- docker/template/template.html -->
+<!DOCTYPE html>
+<html lang="$lang$">
+<head>
+<meta charset="utf-8">
+<title>$title$</title>
+</head>
+<body>
+<header class="doc-header">
+  <div class="doc-header__subject">$subject$$if(module)$ · $module$$endif$</div>
+  <div class="doc-header__title">$topic$</div>
+  <div class="doc-header__meta">$name$ · $class$ · $date$</div>
+</header>
+<main>
+$body$
+</main>
+</body>
+</html>
