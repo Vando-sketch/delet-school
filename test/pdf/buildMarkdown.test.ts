@@ -5,15 +5,15 @@ import type { ProcessedFileResult } from '../../src/types.js';
 function makeResult(overrides: Partial<ProcessedFileResult> = {}): ProcessedFileResult {
   return {
     originalFileName: 'arbeitsblatt1.pdf',
-    isMaterialblatt: false,
-    fach: 'BGWP',
-    thema: 'Kaufvertragsrecht',
+    isReferenceSheet: false,
+    subject: 'Math',
+    topic: 'Kaufvertragsrecht',
     tasksFound: [
       {
         title: 'Mangelhafte Lieferung',
         taskDescription: 'Welche Rechte hat der Käufer bei einem Sachmangel?',
         proposedSolution: 'Nacherfüllung nach § 439 BGB.',
-        quelle: '§ 437, § 439 BGB',
+        source: '§ 437, § 439 BGB',
       },
     ],
     ...overrides,
@@ -22,64 +22,64 @@ function makeResult(overrides: Partial<ProcessedFileResult> = {}): ProcessedFile
 
 describe('buildSolutionMarkdown', () => {
   beforeEach(() => {
-    process.env.STUDENT_NAME = 'Elias Helmer';
-    process.env.STUDENT_KLASSE = 'IT10b';
+    process.env.STUDENT_NAME = 'Jordan Rivera';
+    process.env.STUDENT_CLASS = '10A';
   });
 
   afterEach(() => {
     delete process.env.STUDENT_NAME;
-    delete process.env.STUDENT_KLASSE;
+    delete process.env.STUDENT_CLASS;
   });
 
-  it('includes frontmatter with fach, thema, name, klasse, and the given datum', () => {
+  it('includes frontmatter with subject, topic, name, class, and the given date', () => {
     const md = buildSolutionMarkdown(makeResult(), '2026-07-23');
 
-    expect(md).toContain('fach: "BGWP"');
-    expect(md).toContain('thema: "Kaufvertragsrecht – Lösungen"');
-    expect(md).toContain('name: "Elias Helmer"');
-    expect(md).toContain('klasse: "IT10b"');
-    expect(md).toContain('datum: "2026-07-23"');
+    expect(md).toContain('subject: "Math"');
+    expect(md).toContain('topic: "Kaufvertragsrecht – Solutions"');
+    expect(md).toContain('name: "Jordan Rivera"');
+    expect(md).toContain('class: "10A"');
+    expect(md).toContain('date: "2026-07-23"');
   });
 
   it('neutralizes control characters in frontmatter fields so the YAML scalar stays on one line', () => {
-    const md = buildSolutionMarkdown(makeResult({ thema: 'Bruch\nrechnung\tteil' }), '2026-07-23');
+    const md = buildSolutionMarkdown(makeResult({ topic: 'Bruch\nrechnung\tteil' }), '2026-07-23');
     const frontmatter = md.slice(0, md.indexOf('\n---', 3) + 4);
-    expect(frontmatter).not.toMatch(/thema: "[^"]*[\n\t]/);
-    expect(frontmatter).toContain('thema: "Bruch rechnung teil – Lösungen"');
+    expect(frontmatter).not.toMatch(/topic: "[^"]*[\n\t]/);
+    expect(frontmatter).toContain('topic: "Bruch rechnung teil – Solutions"');
   });
 
-  it('omits the lernfeld frontmatter line when not present', () => {
+  it('omits the module frontmatter line when not present', () => {
     const md = buildSolutionMarkdown(makeResult(), '2026-07-23');
-    expect(md).not.toContain('lernfeld:');
+    expect(md).not.toContain('module:');
   });
 
-  it('includes the lernfeld frontmatter line when present', () => {
-    const md = buildSolutionMarkdown(makeResult({ lernfeld: 'LF 3' }), '2026-07-23');
-    expect(md).toContain('lernfeld: "LF 3"');
+  it('includes the module frontmatter line when present', () => {
+    const md = buildSolutionMarkdown(makeResult({ module: 'LF 3' }), '2026-07-23');
+    expect(md).toContain('module: "LF 3"');
   });
 
-  it('renders one numbered task block with nested frage/antwort/quelle fenced divs', () => {
+  it('renders one numbered task block with nested question/answer/source fenced divs', () => {
     const md = buildSolutionMarkdown(makeResult(), '2026-07-23');
 
     expect(md).toContain(':::: {.task}');
     expect(md).toContain('## 1. Mangelhafte Lieferung');
-    expect(md).toContain('::: {.frage}');
+    expect(md).toContain('::: {.question}');
     expect(md).toContain('Welche Rechte hat der Käufer bei einem Sachmangel?');
-    expect(md).toContain('::: {.antwort}');
+    expect(md).toContain('::: {.answer}');
     expect(md).toContain('Nacherfüllung nach § 439 BGB.');
-    expect(md).toContain('::: {.quelle}');
+    expect(md).toContain('::: {.source}');
     expect(md).toContain('§ 437, § 439 BGB');
     expect(md).toContain('::::');
   });
 
-  it('omits the quelle block for a task with no quelle', () => {
+  it('omits the source block for a task with no source', () => {
     const result = makeResult({
       tasksFound: [
         { title: 'Ohne Quelle', taskDescription: 'Frage ohne Quelle', proposedSolution: 'Antwort ohne Quelle' },
       ],
     });
     const md = buildSolutionMarkdown(result, '2026-07-23');
-    expect(md).not.toContain('{.quelle}');
+    expect(md).not.toContain('{.source}');
   });
 
   it('numbers multiple tasks sequentially', () => {
@@ -110,19 +110,19 @@ describe('buildSolutionMarkdown', () => {
     expect(md).not.toContain('<script>');
   });
 
-  describe('hintergrundKontext callout', () => {
-    it('renders background context section when hintergrundKontext is present', () => {
+  describe('backgroundContext callout', () => {
+    it('renders background context section when backgroundContext is present', () => {
       const result = makeResult({
-        hintergrundKontext: 'Das Unternehmen Meyer GmbH & Co. KG plant ein neues Firmennetzwerk.',
+        backgroundContext: 'Das Unternehmen Meyer GmbH & Co. KG plant ein neues Firmennetzwerk.',
       });
       const md = buildSolutionMarkdown(result, '2026-07-23');
 
-      expect(md).toContain('::: {.hintergrund-kontext}\n### Hintergrund & Kontext\n\nDas Unternehmen Meyer GmbH & Co. KG plant ein neues Firmennetzwerk.\n:::\n\n');
+      expect(md).toContain('::: {.background-context}\n### Background & Context\n\nDas Unternehmen Meyer GmbH & Co. KG plant ein neues Firmennetzwerk.\n:::\n\n');
     });
 
-    it('escapes special characters in hintergrundKontext via escapeForPandoc', () => {
+    it('escapes special characters in backgroundContext via escapeForPandoc', () => {
       const result = makeResult({
-        hintergrundKontext: 'Szenario: <script>alert("test")</script> & ::: fence',
+        backgroundContext: 'Szenario: <script>alert("test")</script> & ::: fence',
       });
       const md = buildSolutionMarkdown(result, '2026-07-23');
 
@@ -132,22 +132,21 @@ describe('buildSolutionMarkdown', () => {
     });
 
 
-    it('omits background context section when hintergrundKontext is missing, empty, or whitespace', () => {
-      const resultEmpty = makeResult({ hintergrundKontext: '' });
+    it('omits background context section when backgroundContext is missing, empty, or whitespace', () => {
+      const resultEmpty = makeResult({ backgroundContext: '' });
       const mdEmpty = buildSolutionMarkdown(resultEmpty, '2026-07-23');
-      expect(mdEmpty).not.toContain('::: {.hintergrund-kontext}');
-      expect(mdEmpty).not.toContain('Hintergrund & Kontext');
+      expect(mdEmpty).not.toContain('::: {.background-context}');
+      expect(mdEmpty).not.toContain('Background & Context');
 
-      const resultSpaces = makeResult({ hintergrundKontext: '   \n  ' });
+      const resultSpaces = makeResult({ backgroundContext: '   \n  ' });
       const mdSpaces = buildSolutionMarkdown(resultSpaces, '2026-07-23');
-      expect(mdSpaces).not.toContain('::: {.hintergrund-kontext}');
-      expect(mdSpaces).not.toContain('Hintergrund & Kontext');
+      expect(mdSpaces).not.toContain('::: {.background-context}');
+      expect(mdSpaces).not.toContain('Background & Context');
 
-      const resultUndefined = makeResult({ hintergrundKontext: undefined });
+      const resultUndefined = makeResult({ backgroundContext: undefined });
       const mdUndefined = buildSolutionMarkdown(resultUndefined, '2026-07-23');
-      expect(mdUndefined).not.toContain('::: {.hintergrund-kontext}');
-      expect(mdUndefined).not.toContain('Hintergrund & Kontext');
+      expect(mdUndefined).not.toContain('::: {.background-context}');
+      expect(mdUndefined).not.toContain('Background & Context');
     });
   });
 });
-
