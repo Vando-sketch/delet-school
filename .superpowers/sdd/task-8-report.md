@@ -32,7 +32,7 @@ $ npm test -- test/extract/index.test.ts
 ...
 FAIL  test/extract/index.test.ts [ test/extract/index.test.ts ]
 Error: Failed to load url ../../src/extract/index.js (resolved id: ../../src/extract/index.js) in
-/Users/elias/Programms/delet-school/test/extract/index.test.ts. Does the file exist?
+test/extract/index.test.ts. Does the file exist?
 Test Files  1 failed (1)
      Tests  no tests
 ```

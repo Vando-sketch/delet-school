@@ -1165,7 +1165,7 @@ index 0000000..1df4e13
 + * see docs/superpowers/specs/2026-07-23-pdf-solve-pipeline-design.md.
 + */
 +export const FACH_SUBPATH: Record<FachKey, string> = {
-+  BGWP: 'BGWP/Grünig',
++  BGWP: 'BGWP',
 +  Englisch: 'Englisch',
 +  Deutsch: 'Deutsch',
 +  IT: 'FU-IT',
@@ -1632,8 +1632,8 @@ index 0000000..c0a8132
 +const REQUIRED_ENV = {
 +  NEXTCLOUD_DATA_DIR: '/data',
 +  NEXTCLOUD_TARGET_USER: 'alice',
-+  STUDENT_NAME: 'Elias Helmer',
-+  STUDENT_KLASSE: 'IT10b',
++  STUDENT_NAME: 'Jordan Rivera',
++  STUDENT_KLASSE: '10A',
 +};
 +
 +describe('config defaults', () => {
@@ -1662,8 +1662,8 @@ index 0000000..c0a8132
 +
 +  it('exposes required STUDENT_NAME / STUDENT_KLASSE', async () => {
 +    const { config } = await import('../src/config/index.js');
-+    expect(config.student.name()).toBe('Elias Helmer');
-+    expect(config.student.klasse()).toBe('IT10b');
++    expect(config.student.name()).toBe('Jordan Rivera');
++    expect(config.student.klasse()).toBe('10A');
 +  });
 +});
 diff --git a/test/extract/index.test.ts b/test/extract/index.test.ts
@@ -2020,7 +2020,7 @@ index 07ea653..bf2759a 100644
  
 -    const content = await fs.readFile(writtenPath, 'utf8');
 -    expect(content).toBe(result.summaryMarkdown);
-+    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
++    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'BGWP', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
 +    expect(writtenPath).toBe(expectedPath);
 +    expect(await fs.readFile(writtenPath)).toEqual(pdfBytes);
    });
@@ -2091,7 +2091,7 @@ index 07ea653..bf2759a 100644
 +    const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
  
 -    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'teams-task-agent');
-+    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig');
++    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'BGWP');
      const resolvedWritten = path.resolve(writtenPath);
 -
      expect(resolvedWritten.startsWith(expectedDir + path.sep)).toBe(true);
@@ -2135,7 +2135,7 @@ index 07ea653..bf2759a 100644
  
      expect(calls).toHaveLength(1);
 -    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/teams-task-agent`]);
-+    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP/Grünig`]);
++    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP`]);
    });
  });
 diff --git a/test/pdf/buildMarkdown.test.ts b/test/pdf/buildMarkdown.test.ts
@@ -2168,8 +2168,8 @@ index 0000000..0eb643f
 +
 +describe('buildSolutionMarkdown', () => {
 +  beforeEach(() => {
-+    process.env.STUDENT_NAME = 'Elias Helmer';
-+    process.env.STUDENT_KLASSE = 'IT10b';
++    process.env.STUDENT_NAME = 'Jordan Rivera';
++    process.env.STUDENT_KLASSE = '10A';
 +  });
 +
 +  afterEach(() => {
@@ -2182,8 +2182,8 @@ index 0000000..0eb643f
 +
 +    expect(md).toContain('fach: "BGWP"');
 +    expect(md).toContain('thema: "Kaufvertragsrecht – Lösungen"');
-+    expect(md).toContain('name: "Elias Helmer"');
-+    expect(md).toContain('klasse: "IT10b"');
++    expect(md).toContain('name: "Jordan Rivera"');
++    expect(md).toContain('klasse: "10A"');
 +    expect(md).toContain('datum: "2026-07-23"');
 +  });
 +
@@ -2709,7 +2709,7 @@ index 1e3507e..d9e9dca 100644
 +    processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
 +    buildSolutionMarkdown.mockReturnValue('# solution markdown');
 +    renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
-+    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf' });
++    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/arbeitsblatt1_Loesung_2026-07-23.pdf' });
  
      const { createFileJobWorker } = await import('../src/worker/index.js');
      const { Worker } = await import('bullmq');

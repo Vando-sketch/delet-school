@@ -46,7 +46,7 @@ All dependencies have sensible defaults pointing to real `node:fs` implementatio
 Command: npm test -- test/pdf/renderPdf.test.ts
 
 Result: FAIL
-Error: Failed to load url ../../src/pdf/renderPdf.js (resolved id: ../../src/pdf/renderPdf.js) in /Users/elias/Programms/delet-school/test/pdf/renderPdf.test.ts. Does the file exist?
+Error: Failed to load url ../../src/pdf/renderPdf.js (resolved id: ../../src/pdf/renderPdf.js) in test/pdf/renderPdf.test.ts. Does the file exist?
 
 Test Files: 1 failed
 Tests: no tests

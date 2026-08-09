@@ -19,12 +19,12 @@
 ### Task 1: Add Concurrency Config
 
 **Files:**
-- Modify: `/Users/elias/Programms/delet-school/src/config/index.ts`
-- Modify: `/Users/elias/Programms/delet-school/src/worker/index.ts`
+- Modify: `src/config/index.ts`
+- Modify: `src/worker/index.ts`
 
 - [ ] **Step 1: Update config to support WORKER_CONCURRENCY**
 
-Modify `/Users/elias/Programms/delet-school/src/config/index.ts` to add `worker: { concurrency: Number(optional('WORKER_CONCURRENCY', '1')) }` to the `config` object.
+Modify `src/config/index.ts` to add `worker: { concurrency: Number(optional('WORKER_CONCURRENCY', '1')) }` to the `config` object.
 
 ```typescript
 export const config = {
@@ -38,7 +38,7 @@ export const config = {
 
 - [ ] **Step 2: Update worker instantiation**
 
-Modify `/Users/elias/Programms/delet-school/src/worker/index.ts` to use this config when creating the BullMQ Worker.
+Modify `src/worker/index.ts` to use this config when creating the BullMQ Worker.
 
 ```typescript
 export function createFileJobWorker(): Worker<FileJobData> {
@@ -65,8 +65,8 @@ git commit -m "feat: add WORKER_CONCURRENCY configuration"
 ### Task 2: Refactor processFile for Two-Pass Architecture
 
 **Files:**
-- Modify: `/Users/elias/Programms/delet-school/src/claude/processFile.ts`
-- Modify: `/Users/elias/Programms/delet-school/test/processFile.test.ts`
+- Modify: `src/claude/processFile.ts`
+- Modify: `test/processFile.test.ts`
 
 **Interfaces:**
 - We keep the existing `FileProcessor.processFile` signature but change its internal logic.

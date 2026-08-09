@@ -55,7 +55,7 @@ describe('createNextcloudWriter().writeResult', () => {
 
     const { writtenPath } = await writer.writeResult(makeResult(), { kind: 'pdf', bytes: pdfBytes }, '2026-07-23');
 
-    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
+    const expectedPath = path.join(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'BGWP', 'arbeitsblatt1_Loesung_2026-07-23.pdf');
     expect(writtenPath).toBe(expectedPath);
     expect(await fs.readFile(writtenPath)).toEqual(pdfBytes);
   });
@@ -105,7 +105,7 @@ describe('createNextcloudWriter().writeResult', () => {
 
     const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'Grünig');
+    const expectedDir = path.resolve(tmpDir, TARGET_USER, 'files', 'Fächer', 'BGWP', 'BGWP');
     const resolvedWritten = path.resolve(writtenPath);
     expect(resolvedWritten.startsWith(expectedDir + path.sep)).toBe(true);
     expect(resolvedWritten).not.toContain('..');
@@ -133,7 +133,7 @@ describe('createNextcloudWriter().writeResult', () => {
     await writer.writeResult(makeResult(), { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP/Grünig`]);
+    expect(calls[0]?.args).toEqual(['files:scan', `--path=/${TARGET_USER}/files/Fächer/BGWP`]);
   });
 });
 ```

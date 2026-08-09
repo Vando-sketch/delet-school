@@ -20,9 +20,9 @@
 ### Task 1: Single-Pass Poppler Extraction & Fallback (`src/extract/pdfText.ts`)
 
 **Files:**
-- Modify: [src/extract/pdfText.ts](file:///Users/elias/Programms/delet-school/src/extract/pdfText.ts)
-- Modify: [src/extract/index.ts](file:///Users/elias/Programms/delet-school/src/extract/index.ts)
-- Modify: [test/extract/pdfText.test.ts](file:///Users/elias/Programms/delet-school/test/extract/pdfText.test.ts)
+- Modify: [src/extract/pdfText.ts](src/extract/pdfText.ts)
+- Modify: [src/extract/index.ts](src/extract/index.ts)
+- Modify: [test/extract/pdfText.test.ts](test/extract/pdfText.test.ts)
 
 **Interfaces:**
 - Consumes: `ExecFileFn` from `src/lib/execFile.ts`
@@ -117,8 +117,8 @@ git commit -m "refactor(extract): implement single-pass getAllPagesText with tra
 ### Task 2: Hunspell Header Skipping, Regex Parsing & Multi-Path Cache (`src/extract/dictionary.ts`)
 
 **Files:**
-- Modify: [src/extract/dictionary.ts](file:///Users/elias/Programms/delet-school/src/extract/dictionary.ts)
-- Modify: [test/extract/dictionary.test.ts](file:///Users/elias/Programms/delet-school/test/extract/dictionary.test.ts)
+- Modify: [src/extract/dictionary.ts](src/extract/dictionary.ts)
+- Modify: [test/extract/dictionary.test.ts](test/extract/dictionary.test.ts)
 
 **Interfaces:**
 - Consumes: `LoadWordSetDeps` from `src/extract/dictionary.ts`
@@ -223,8 +223,8 @@ git commit -m "refactor(extract): optimize dictionary parsing with header skippi
 ### Task 3: Bounded Parallel Vision Page Rendering Queue (`src/extract/index.ts`)
 
 **Files:**
-- Modify: [src/extract/index.ts](file:///Users/elias/Programms/delet-school/src/extract/index.ts)
-- Modify: [test/extract/index.test.ts](file:///Users/elias/Programms/delet-school/test/extract/index.test.ts)
+- Modify: [src/extract/index.ts](src/extract/index.ts)
+- Modify: [test/extract/index.test.ts](test/extract/index.test.ts)
 
 **Interfaces:**
 - Consumes: `renderPageToPng` from `src/extract/renderPage.ts`
