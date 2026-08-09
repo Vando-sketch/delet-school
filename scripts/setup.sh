@@ -150,8 +150,14 @@ if command -v agy >/dev/null 2>&1; then
 else
   run_logged bash -c 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
   if [ -x "$HOME/.local/bin/agy" ] && ! command -v agy >/dev/null 2>&1; then
-    log "agy installed to $HOME/.local/bin/agy - add that directory to PATH if the" \
-      "'agy' command isn't found in new shells."
+    # The installer already appends this PATH export to ~/.bashrc and ~/.profile itself -
+    # it just hasn't taken effect in *this* shell yet. Export it here too so the rest of
+    # this script (and anything you run right after, in this same shell) sees `agy`
+    # without a manual copy-paste step; new shells pick it up automatically already.
+    export PATH="$HOME/.local/bin:$PATH"
+    log "agy installed to $HOME/.local/bin - added to PATH for the rest of this script." \
+      "The installer already added it to ~/.bashrc/~/.profile too, so new shells pick it" \
+      "up on their own; this shell will see it after 'source ~/.bashrc' or a new login."
   fi
 fi
 
