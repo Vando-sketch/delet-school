@@ -63,10 +63,14 @@ Worker
 
 One command installs everything needed to run outside Docker: system PDF/OCR toolchain
 (`poppler-utils`, `ocrmypdf`, `tesseract-ocr` + language packs, `pandoc`, `hunspell`
-dictionaries — via `apt-get`/`dnf`/`brew`, whichever is found), a Python venv with
-`markitdown`+`weasyprint`, npm dependencies, the `claude` CLI, and the `agy` CLI (installed only
-if not already on `PATH`; prompts for `sudo` for system packages). Safe to re-run. Also scaffolds
-`.env` from `.env.example` if it doesn't exist yet. Logs to both the terminal and `setup.log`.
+dictionaries — via `apt-get`/`dnf`/`brew`, whichever is found), the `tailscale` client, a Python
+venv with `markitdown`+`weasyprint`, npm dependencies, the `claude` CLI, and the `agy` CLI
+(installed only if not already on `PATH`; prompts for `sudo` for system packages, including the
+global npm installs). Safe to re-run. Also scaffolds `.env` from `.env.example` if it doesn't
+exist yet. Logs to both the terminal and `setup.log`.
+
+It does **not** join a tailnet or set up Taildrop delivery — see the Tailscale paragraph and
+"Known open items" below for what's still manual.
 
 ```bash
 npm run setup
@@ -98,7 +102,10 @@ processed as-is.
 Nextcloud itself only needs to be reachable over HTTPS on the tailnet (its normal web server,
 at its Tailscale MagicDNS hostname) - see `.env.example` for the `NEXTCLOUD_*` and `TS_*`
 variables, and `docker/tailscale/` for the sidecar that provides tailnet connectivity to the
-`ingest`/`worker`/`redis` containers.
+`ingest`/`worker`/`redis` containers. Outside Docker, `npm run setup` installs the `tailscale`
+client but doesn't join a tailnet — run `tailscale up` yourself (interactive browser auth, or
+`tailscale up --authkey=...`) before `NEXTCLOUD_BASE_URL` will be reachable. See "Known open
+items" below for what Taildrop delivery does (and doesn't) do outside Docker.
 
 `ANTHROPIC_API_KEY` is optional: the Claude Agent SDK subprocess can instead authenticate via a
 Claude Pro/Max subscription login (`claude login` in the worker's environment), which draws
@@ -158,3 +165,11 @@ Beyond the vars covered above, Docker-only requirements in `.env`:
 - The OCR-quality gate's dictionary-ratio threshold (0.45, `src/extract/pdfText.ts`) is a
   starting point, not empirically tuned; adjusting it against real scanned/handwritten homework
   is expected follow-up once this is in regular use.
+- **No Taildrop delivery path outside Docker.** The `tailscale file get` polling loop that
+  drains Taildrop into the watched inbox lives entirely in `docker/tailscale/entrypoint.sh`
+  (the Compose sidecar) — `src/ingest/taildropDrain.ts` only moves files between two local
+  directories and never calls `tailscale` itself. `npm run setup` installs the `tailscale`
+  client (for `NEXTCLOUD_BASE_URL` reachability) but does not join a tailnet or replicate that
+  polling loop. Running `dev:ingest`/`dev:worker` directly (not via Docker Compose) means
+  either dropping files straight into `INGEST_WATCH_DIR` or scripting the same poll loop
+  yourself.

@@ -95,6 +95,25 @@ else
     "full package list, then re-run this script - it will pick up from step 2."
 fi
 
+# --- 1.5. Tailscale client (Nextcloud reachability; NOT the Docker sidecar's Taildrop drain) --
+log_step "Installing the Tailscale client"
+
+if command -v tailscale >/dev/null 2>&1; then
+  log "tailscale already installed ($(command -v tailscale)), skipping"
+else
+  run_logged bash -c 'curl -fsSL https://tailscale.com/install.sh | sh'
+fi
+log "This installs the client only - it does NOT join a tailnet. Run 'tailscale up'" \
+  "yourself (interactive browser auth, or 'tailscale up --authkey=...') before starting" \
+  "the worker, so NEXTCLOUD_BASE_URL (a tailnet MagicDNS hostname) is reachable."
+log "Also: outside Docker there is no Taildrop delivery path at all. The 'tailscale file" \
+  "get' polling loop that drains Taildrop into the watched inbox only exists in" \
+  "docker/tailscale/entrypoint.sh (the Docker Compose sidecar) - src/ingest/" \
+  "taildropDrain.ts just moves files between two local directories, it never calls" \
+  "tailscale itself. For a non-Docker run, drop files directly into INGEST_WATCH_DIR" \
+  "instead of relying on Taildrop, or run 'watch -n5 tailscale file get \$TAILDROP_STAGING_DIR'" \
+  "yourself to replicate the sidecar's loop."
+
 # --- 2. Python venv for markitdown + weasyprint ------------------------------------------
 log_step "Setting up Python venv for markitdown + weasyprint"
 
