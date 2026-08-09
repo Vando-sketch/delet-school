@@ -75,7 +75,7 @@ describe('worker pipeline', () => {
     processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
     buildSolutionMarkdown.mockReturnValue('# solution markdown');
     renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
-    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf' });
+    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/arbeitsblatt1_Loesung_2026-07-23.pdf' });
 
     const { createFileJobWorker } = await import('../src/worker/index.js');
     const { Worker } = await import('bullmq');

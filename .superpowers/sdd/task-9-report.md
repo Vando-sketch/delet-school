@@ -9,8 +9,8 @@ Created two static assets for the PDF solution document pipeline:
 2. **docker/vorlage/style.css** - Style E stylesheet (formal serif design with thin colored left-rule labels)
 
 ## Files Created
-- `/Users/elias/Programms/delet-school/docker/vorlage/template.html` (17 lines)
-- `/Users/elias/Programms/delet-school/docker/vorlage/style.css` (96 lines)
+- `docker/vorlage/template.html` (17 lines)
+- `docker/vorlage/style.css` (96 lines)
 
 ## Self-Review Verification
 

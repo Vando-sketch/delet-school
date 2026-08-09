@@ -4,8 +4,8 @@ const REQUIRED_ENV = {
   NEXTCLOUD_BASE_URL: 'https://nextcloud.example.ts.net',
   NEXTCLOUD_USERNAME: 'alice',
   NEXTCLOUD_APP_PASSWORD: 'app-password',
-  STUDENT_NAME: 'Elias Helmer',
-  STUDENT_KLASSE: 'IT10b',
+  STUDENT_NAME: 'Jordan Rivera',
+  STUDENT_CLASS: '10A',
 };
 
 describe('config defaults', () => {
@@ -34,10 +34,10 @@ describe('config defaults', () => {
     expect(config.anthropic.model).toBe('claude-sonnet-5');
   });
 
-  it('exposes required STUDENT_NAME / STUDENT_KLASSE', async () => {
+  it('exposes required STUDENT_NAME / STUDENT_CLASS', async () => {
     const { config } = await import('../src/config/index.js');
-    expect(config.student.name()).toBe('Elias Helmer');
-    expect(config.student.klasse()).toBe('IT10b');
+    expect(config.student.name()).toBe('Jordan Rivera');
+    expect(config.student.className()).toBe('10A');
   });
 
   it('exposes required Nextcloud WebDAV settings', async () => {
@@ -67,5 +67,11 @@ describe('config defaults', () => {
     expect(config.agy.pass2Effort).toBe('high');
     expect(config.agy.printTimeout).toBe('5m');
     expect(config.agy.binary).toBe('agy');
+  });
+
+  it('defaults OUTPUT_LANGUAGE to English', async () => {
+    delete process.env.OUTPUT_LANGUAGE;
+    const { config } = await import('../src/config/index.js');
+    expect(config.output.language()).toBe('English');
   });
 });

@@ -2,26 +2,34 @@ import { config } from '../config/index.js';
 import { escapeForPandoc } from './escape.js';
 import type { ProcessedFileResult, TaskSolution } from '../types.js';
 
+const LANGUAGE_CODES: Record<string, string> = {
+  english: 'en',
+  german: 'de',
+  spanish: 'es',
+  french: 'fr',
+};
+
+function languageCode(language: string): string {
+  return LANGUAGE_CODES[language.trim().toLowerCase()] ?? 'en';
+}
+
 function escapeYamlString(text: string): string {
-  // Collapse C0 control chars (newlines, tabs, etc.) to spaces first: a raw newline in model-
-  // authored `thema`/`lernfeld` would break the single-line double-quoted YAML scalar these
-  // values are interpolated into and fail the pandoc render. Then escape backslash and quote.
   return text
     .replace(/[\x00-\x1F]/g, ' ')
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '\\"');
 }
 
-function buildFrontmatter(result: ProcessedFileResult, datum: string): string {
+function buildFrontmatter(result: ProcessedFileResult, date: string): string {
   const lines = [
     '---',
-    'lang: de',
-    `fach: "${escapeYamlString(result.fach)}"`,
-    result.lernfeld ? `lernfeld: "${escapeYamlString(result.lernfeld)}"` : undefined,
-    `thema: "${escapeYamlString(result.thema)} – Lösungen"`,
+    `lang: ${languageCode(config.output.language())}`,
+    `subject: "${escapeYamlString(result.subject)}"`,
+    result.module ? `module: "${escapeYamlString(result.module)}"` : undefined,
+    `topic: "${escapeYamlString(result.topic)} – Solutions"`,
     `name: "${escapeYamlString(config.student.name())}"`,
-    `klasse: "${escapeYamlString(config.student.klasse())}"`,
-    `datum: "${escapeYamlString(datum)}"`,
+    `class: "${escapeYamlString(config.student.className())}"`,
+    `date: "${escapeYamlString(date)}"`,
     '---',
   ];
   return lines.filter((line): line is string => line !== undefined).join('\n');
@@ -33,29 +41,28 @@ function buildTaskBlock(task: TaskSolution, index: number): string {
     ':::: {.task}',
     `## ${number}. ${escapeForPandoc(task.title)}`,
     '',
-    '::: {.frage}',
+    '::: {.question}',
     escapeForPandoc(task.taskDescription),
     ':::',
     '',
-    '::: {.antwort}',
+    '::: {.answer}',
     escapeForPandoc(task.proposedSolution),
     ':::',
   ];
-  if (task.quelle) {
-    lines.push('', '::: {.quelle}', escapeForPandoc(task.quelle), ':::');
+  if (task.source) {
+    lines.push('', '::: {.source}', escapeForPandoc(task.source), ':::');
   }
   lines.push('::::');
   return lines.join('\n');
 }
 
-export function buildSolutionMarkdown(result: ProcessedFileResult, datum: string): string {
-  const frontmatter = buildFrontmatter(result, datum);
+export function buildSolutionMarkdown(result: ProcessedFileResult, date: string): string {
+  const frontmatter = buildFrontmatter(result, date);
   let backgroundContextSection = '';
-  if (result.hintergrundKontext && result.hintergrundKontext.trim().length > 0) {
-    const escapedContext = escapeForPandoc(result.hintergrundKontext.trim());
-    backgroundContextSection = `::: {.hintergrund-kontext}\n### Hintergrund & Kontext\n\n${escapedContext}\n:::\n\n`;
+  if (result.backgroundContext && result.backgroundContext.trim().length > 0) {
+    const escapedContext = escapeForPandoc(result.backgroundContext.trim());
+    backgroundContextSection = `::: {.background-context}\n### Background & Context\n\n${escapedContext}\n:::\n\n`;
   }
   const blocks = result.tasksFound.map((task, index) => buildTaskBlock(task, index));
   return `${frontmatter}\n\n${backgroundContextSection}${blocks.join('\n\n')}\n`;
 }
-

@@ -2,11 +2,11 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { createClient, type WebDAVClient } from 'webdav';
 import { config } from '../config/index.js';
-import { FACH_SUBPATH } from '../fach.js';
+import { SUBJECT_SUBPATH } from '../subjects.js';
 import type { NextcloudWriteContent, NextcloudWriter, ProcessedFileResult } from '../types.js';
 
-const RESULT_ROOT = 'Fächer';
-const MATERIAL_SUBDIRNAME = 'Material';
+const RESULT_ROOT = 'Subjects';
+const REFERENCE_SUBDIRNAME = 'Reference';
 
 type NextcloudWebDAVClient = Pick<WebDAVClient, 'createDirectory' | 'putFileContents'>;
 
@@ -16,7 +16,7 @@ export interface NextcloudWriterDeps {
 
 /**
  * Neutralizes path separators and parent-directory traversal sequences. `originalFileName`
- * and `lernfeld` are not trusted to be safe for direct path construction (e.g.
+ * and `module` are not trusted to be safe for direct path construction (e.g.
  * `../../etc/passwd` or `foo/bar.txt`).
  */
 function sanitizePathSegment(name: string): string {
@@ -26,42 +26,53 @@ function sanitizePathSegment(name: string): string {
   return trimmed.length > 0 ? trimmed : 'untitled';
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function deriveTargetDir(result: ProcessedFileResult): string[] {
-  const fachSubpath = FACH_SUBPATH[result.fach].split('/').map(sanitizePathSegment);
-  const parts = [RESULT_ROOT, ...fachSubpath];
-  if (result.isMaterialblatt) {
-    parts.push(MATERIAL_SUBDIRNAME);
-  } else if (result.lernfeld) {
-    parts.push(sanitizePathSegment(result.lernfeld));
+  const subjectFolder = SUBJECT_SUBPATH[result.subject];
+  if (subjectFolder === undefined) {
+    throw new Error(`nextcloud/writeResult: no folder mapping configured for subject "${result.subject}".`);
+  }
+  const subjectSubpath = subjectFolder.split('/').map(sanitizePathSegment);
+  const parts = [RESULT_ROOT, ...subjectSubpath];
+  if (result.isReferenceSheet) {
+    parts.push(REFERENCE_SUBDIRNAME);
+  } else if (result.module) {
+    parts.push(sanitizePathSegment(result.module));
   }
   return parts;
 }
 
-function deriveFileName(result: ProcessedFileResult, content: NextcloudWriteContent, datum: string): string {
+function deriveFileName(result: ProcessedFileResult, content: NextcloudWriteContent, date: string): string {
   const base = path.basename(result.originalFileName);
   const ext = path.extname(base);
   let stem = ext.length > 0 ? base.slice(0, -ext.length) : base;
 
-  // Strip redundant leading subject / zip prefixes (e.g. AEuP_Kislik_, AEuP_, IT_Tec_, etc.)
-  // since output files are already stored under the subject folder structure (Fächer/AEuP/...).
-  stem = stem.replace(/^(?:AEuP|IT-Tec|IT|BGWP|Mathe|Deutsch|Englisch)_(?:Kislik_)?/i, '');
-  stem = stem.replace(/^AEuP_Kislik_/i, '');
+  // Strip a redundant leading subject-key prefix (e.g. "Math_01_..." under Subjects/Math/...)
+  // since output files are already stored under the subject folder structure.
+  const subjectKeys = Object.keys(SUBJECT_SUBPATH);
+  if (subjectKeys.length > 0) {
+    const prefixPattern = new RegExp(`^(?:${subjectKeys.map(escapeRegExp).join('|')})_`, 'i');
+    stem = stem.replace(prefixPattern, '');
+  }
 
   const safeStem = sanitizePathSegment(stem);
   const finalStem = safeStem.length > 0 ? safeStem : 'untitled';
 
   if (content.kind === 'pdf') {
-    return `${finalStem}_Loesung_${datum}.pdf`;
+    return `${finalStem}_Solution_${date}.pdf`;
   }
   const materialExt = path.extname(content.sourcePath) || '.txt';
-  return `${finalStem}_${datum}${materialExt}`;
+  return `${finalStem}_${date}${materialExt}`;
 }
 
 /**
  * `createDirectory(path, { recursive: true })` from the `webdav` package already stats each
  * path segment before creating it, so it's idempotent against an already-existing folder on
  * its own. This cache only avoids repeating that network round trip for every file written
- * into a Fach folder that's already been confirmed to exist earlier in the same process.
+ * into a subject folder that's already been confirmed to exist earlier in the same process.
  */
 export function createNextcloudWriter(deps: NextcloudWriterDeps = {}): NextcloudWriter {
   const baseUrl = config.nextcloud.baseUrl();
@@ -76,10 +87,10 @@ export function createNextcloudWriter(deps: NextcloudWriterDeps = {}): Nextcloud
   const knownDirs = new Set<string>();
 
   return {
-    async writeResult(result, content, datum) {
+    async writeResult(result, content, date) {
       const dirParts = deriveTargetDir(result);
       const targetDir = `/${dirParts.join('/')}`;
-      const fileName = deriveFileName(result, content, datum);
+      const fileName = deriveFileName(result, content, date);
       const writtenPath = `${targetDir}/${fileName}`;
 
       if (client) {

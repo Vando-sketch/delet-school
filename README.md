@@ -27,9 +27,9 @@ Worker
         │      Claude vision (handwriting or still-garbled OCR)
         ├─ 2. Claude Agent SDK: classify subject, solve every task with citations
         ├─ 3. Render a styled solution PDF (pandoc + weasyprint) — or, for a pure
-        │      Materialblatt (no tasks), skip straight to filing the source
+        │      reference sheet (no tasks), skip straight to filing the source
         ├─ 4. Write into Nextcloud over WebDAV (via Tailscale):
-        │      Fächer/<Fach>/[<Lernfeld>/]<name>_Loesung_<date>.pdf
+        │      Subjects/<Subject>/[<Module>/]<name>_Solution_<date>.pdf
         └─ 5. Archive the source (OCR'd searchable version if OCR ran) into `.processed/`
              (or `.failed/` on error)
 ```
@@ -43,11 +43,11 @@ Worker
 - `src/extract/` — per-page tiered text extraction: MarkItDown for text-layer PDFs,
   `ocrmypdf`/Tesseract for scans, rendered page images for Claude's vision fallback on
   handwriting or still-garbled OCR output.
-- `src/claude/` — Claude Agent SDK integration that classifies the subject (Fach) and
-  Info-/Materialblatt vs. Aufgabenblatt, and solves every task found with citations.
+- `src/claude/` — Claude Agent SDK integration that classifies the subject and
+  reference sheet vs. task sheet, and solves every task found with citations.
 - `src/pdf/` — builds the solution Markdown and renders it to a styled PDF via
   `pandoc`+`weasyprint`.
-- `src/nextcloud/` — writes the result into Nextcloud under `Fächer/<Fach>/[<Lernfeld>/]` over
+- `src/nextcloud/` — writes the result into Nextcloud under `Subjects/<Subject>/[<Module>/]` over
   WebDAV.
 - `src/ingest/taildropDrain.ts` — moves files the Tailscale sidecar drains from Taildrop into
   the watched inbox directory.
@@ -60,12 +60,12 @@ Worker
 
 ```bash
 npm install
-cp .env.example .env   # fill in STUDENT_NAME, STUDENT_KLASSE, INGEST_WATCH_DIR + Nextcloud values
+cp .env.example .env   # fill in STUDENT_NAME, STUDENT_CLASS, INGEST_WATCH_DIR + Nextcloud values
 npm run dev:ingest     # local folder watcher
 npm run dev:worker     # local worker
 ```
 
-`STUDENT_NAME` and `STUDENT_KLASSE` are required and used to personalize solution output.
+`STUDENT_NAME` and `STUDENT_CLASS` are required and used to personalize solution output. `SUBJECTS` and `OUTPUT_LANGUAGE` are also configurable (see `.env.example` for format).
 
 `INGEST_WATCH_DIR` defaults to `__INBOX__` in the root of the project directory - files land
 there via the Tailscale sidecar draining Taildrop sends into it (see below), so it doesn't need
@@ -98,6 +98,10 @@ optional (defaults to claude-sonnet-5, since homework-solving requires more reas
   and `NEXTCLOUD_OCC_BIN` environment variables are no longer supported. They have been replaced
   with `NEXTCLOUD_BASE_URL`, `NEXTCLOUD_USERNAME`, and `NEXTCLOUD_APP_PASSWORD` (WebDAV-based).
   Existing `.env` files must be updated to use the new variables.
+- **Breaking change (subject/output config)**: `STUDENT_KLASSE` is now `STUDENT_CLASS`. The
+  subject list is no longer hardcoded — configure it via `SUBJECTS` (defaults to a generic
+  example set) and control generated-solution language via `OUTPUT_LANGUAGE` (defaults to
+  English). Existing `.env` files must be updated.
 - The OCR-quality gate's dictionary-ratio threshold (0.45, `src/extract/pdfText.ts`) is a
   starting point, not empirically tuned; adjusting it against real scanned/handwritten homework
   is expected follow-up once this is in regular use.

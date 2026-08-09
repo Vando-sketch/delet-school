@@ -36,8 +36,8 @@ function makeResult(overrides: Partial<ProcessedFileResult> = {}): ProcessedFile
 
 describe('buildSolutionMarkdown', () => {
   beforeEach(() => {
-    process.env.STUDENT_NAME = 'Elias Helmer';
-    process.env.STUDENT_KLASSE = 'IT10b';
+    process.env.STUDENT_NAME = 'Jordan Rivera';
+    process.env.STUDENT_KLASSE = '10A';
   });
 
   afterEach(() => {
@@ -50,8 +50,8 @@ describe('buildSolutionMarkdown', () => {
 
     expect(md).toContain('fach: "BGWP"');
     expect(md).toContain('thema: "Kaufvertragsrecht – Lösungen"');
-    expect(md).toContain('name: "Elias Helmer"');
-    expect(md).toContain('klasse: "IT10b"');
+    expect(md).toContain('name: "Jordan Rivera"');
+    expect(md).toContain('klasse: "10A"');
     expect(md).toContain('datum: "2026-07-23"');
   });
 

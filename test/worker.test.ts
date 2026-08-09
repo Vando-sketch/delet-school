@@ -34,17 +34,17 @@ process.env.INGEST_WATCH_DIR = '/inbox';
 
 const AUFGABENBLATT_RESULT = {
   originalFileName: 'arbeitsblatt1.pdf',
-  isMaterialblatt: false,
-  fach: 'BGWP',
-  thema: 'Kaufvertragsrecht',
+  isReferenceSheet: false,
+  subject: 'Math',
+  topic: 'Kaufvertragsrecht',
   tasksFound: [{ title: 't', taskDescription: 'q', proposedSolution: 'a' }],
 };
 
 const MATERIAL_RESULT = {
   originalFileName: 'handout.pdf',
-  isMaterialblatt: true,
-  fach: 'Deutsch',
-  thema: 'Grammatikregeln',
+  isReferenceSheet: true,
+  subject: 'History',
+  topic: 'Grammatikregeln',
   tasksFound: [],
 };
 
@@ -64,7 +64,7 @@ describe('worker pipeline', () => {
     processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
     buildSolutionMarkdown.mockReturnValue('# solution markdown');
     renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
-    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf' });
+    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Subjects/Math/arbeitsblatt1_Solution_2026-07-23.pdf' });
 
     const { createFileJobWorker } = await import('../src/worker/index.js');
     const { Worker } = await import('bullmq');
@@ -130,10 +130,10 @@ describe('worker pipeline', () => {
     expect(rm).toHaveBeenCalledWith('/inbox/scan.pdf', { force: true });
   });
 
-  it('skips PDF generation and writes the archival source directly for a Materialblatt', async () => {
+  it('skips PDF generation and writes the archival source directly for a reference sheet', async () => {
     extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/handout.pdf' });
     processFile.mockResolvedValue(MATERIAL_RESULT);
-    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/Deutsch/Material/handout_2026-07-23.pdf' });
+    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Subjects/History/Reference/handout_2026-07-23.pdf' });
 
     const { createFileJobWorker } = await import('../src/worker/index.js');
     const { Worker } = await import('bullmq');
@@ -244,7 +244,7 @@ describe('worker pipeline', () => {
     processFile.mockResolvedValue(AUFGABENBLATT_RESULT);
     buildSolutionMarkdown.mockReturnValue('# solution markdown');
     renderSolutionPdf.mockResolvedValue(Buffer.from('%PDF fake'));
-    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf' });
+    writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Subjects/Math/arbeitsblatt1_Solution_2026-07-23.pdf' });
 
     const { createFileJobWorker } = await import('../src/worker/index.js');
     const { Worker } = await import('bullmq');

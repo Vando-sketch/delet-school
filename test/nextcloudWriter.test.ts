@@ -8,9 +8,9 @@ import type { ProcessedFileResult } from '../src/types.js';
 function makeResult(overrides: Partial<ProcessedFileResult> = {}): ProcessedFileResult {
   return {
     originalFileName: 'arbeitsblatt1.pdf',
-    isMaterialblatt: false,
-    fach: 'BGWP',
-    thema: 'Kaufvertragsrecht',
+    isReferenceSheet: false,
+    subject: 'Math',
+    topic: 'Kaufvertragsrecht',
     tasksFound: [],
     ...overrides,
   };
@@ -36,50 +36,50 @@ describe('createNextcloudWriter().writeResult', () => {
     delete process.env.NEXTCLOUD_APP_PASSWORD;
   });
 
-  it('creates the Fach directory (recursive) and PUTs a solved PDF under Fächer/<Fach>/<subpath>/ with a date-suffixed filename', async () => {
+  it('creates the subject directory (recursive) and PUTs a solved PDF under Subjects/<Subject>/<subpath>/ with a date-suffixed filename', async () => {
     const client = makeFakeClient();
     const writer = createNextcloudWriter({ webdavClient: client });
     const pdfBytes = Buffer.from('%PDF-1.4 fake');
 
     const { writtenPath } = await writer.writeResult(makeResult(), { kind: 'pdf', bytes: pdfBytes }, '2026-07-23');
 
-    expect(writtenPath).toBe('/Fächer/BGWP/Grünig/arbeitsblatt1_Loesung_2026-07-23.pdf');
-    expect(client.createDirectory).toHaveBeenCalledWith('/Fächer/BGWP/Grünig', { recursive: true });
+    expect(writtenPath).toBe('/Subjects/Math/arbeitsblatt1_Solution_2026-07-23.pdf');
+    expect(client.createDirectory).toHaveBeenCalledWith('/Subjects/Math', { recursive: true });
     expect(client.putFileContents).toHaveBeenCalledWith(writtenPath, pdfBytes);
   });
 
-  it('nests under lernfeld when present', async () => {
+  it('nests under module when present', async () => {
     const client = makeFakeClient();
     const writer = createNextcloudWriter({ webdavClient: client });
-    const result = makeResult({ fach: 'IT-Tec', lernfeld: 'LF 3' });
+    const result = makeResult({ subject: 'Science', module: 'LF 3' });
 
     const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    expect(writtenPath).toBe('/Fächer/IT-Tec/LF 3/arbeitsblatt1_Loesung_2026-07-23.pdf');
-    expect(client.createDirectory).toHaveBeenCalledWith('/Fächer/IT-Tec/LF 3', { recursive: true });
+    expect(writtenPath).toBe('/Subjects/Science/LF 3/arbeitsblatt1_Solution_2026-07-23.pdf');
+    expect(client.createDirectory).toHaveBeenCalledWith('/Subjects/Science/LF 3', { recursive: true });
   });
 
-  it('routes an unclassifiable Fach to Fächer/_Unsortiert/', async () => {
+  it('routes an unclassifiable subject to Subjects/_Unsorted/', async () => {
     const client = makeFakeClient();
     const writer = createNextcloudWriter({ webdavClient: client });
-    const result = makeResult({ fach: '_Unsortiert' });
+    const result = makeResult({ subject: 'Unsorted' });
 
     const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    expect(writtenPath).toBe('/Fächer/_Unsortiert/arbeitsblatt1_Loesung_2026-07-23.pdf');
+    expect(writtenPath).toBe('/Subjects/_Unsorted/arbeitsblatt1_Solution_2026-07-23.pdf');
   });
 
-  it('routes Materialblatt content into Fächer/<Fach>/Material/ with no _Loesung suffix, reading bytes from sourcePath', async () => {
+  it('routes reference-sheet content into Subjects/<Subject>/Reference/ with no _Solution suffix, reading bytes from sourcePath', async () => {
     const client = makeFakeClient();
     const materialSourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'material-src-'));
     const sourcePath = path.join(materialSourceDir, 'gesetzestext.pdf');
     await fs.writeFile(sourcePath, 'source bytes');
 
     const writer = createNextcloudWriter({ webdavClient: client });
-    const result = makeResult({ isMaterialblatt: true, fach: 'Deutsch', originalFileName: 'gesetzestext.pdf' });
+    const result = makeResult({ isReferenceSheet: true, subject: 'History', originalFileName: 'gesetzestext.pdf' });
     const { writtenPath } = await writer.writeResult(result, { kind: 'material', sourcePath }, '2026-07-23');
 
-    expect(writtenPath).toBe('/Fächer/Deutsch/Material/gesetzestext_2026-07-23.pdf');
+    expect(writtenPath).toBe('/Subjects/History/Reference/gesetzestext_2026-07-23.pdf');
     expect(client.putFileContents).toHaveBeenCalledWith(writtenPath, Buffer.from('source bytes'));
 
     await fs.rm(materialSourceDir, { recursive: true, force: true });
@@ -92,21 +92,21 @@ describe('createNextcloudWriter().writeResult', () => {
 
     const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    expect(writtenPath.startsWith('/Fächer/BGWP/Grünig/')).toBe(true);
+    expect(writtenPath.startsWith('/Subjects/Math/')).toBe(true);
     expect(writtenPath).not.toContain('..');
   });
 
   it('strips directory paths and redundant subject/zip prefixes from originalFileName', async () => {
     const client = makeFakeClient();
     const writer = createNextcloudWriter({ webdavClient: client });
-    const result = makeResult({ fach: 'AEuP', originalFileName: 'AEuP_Kislik/AEuP_Kislik_01_Algorithmus.pdf' });
+    const result = makeResult({ subject: 'Math', originalFileName: 'Math/Math_01_Algebra.pdf' });
 
     const { writtenPath } = await writer.writeResult(result, { kind: 'pdf', bytes: Buffer.from('x') }, '2026-07-23');
 
-    expect(writtenPath).toBe('/Fächer/AEuP/01_Algorithmus_Loesung_2026-07-23.pdf');
+    expect(writtenPath).toBe('/Subjects/Math/01_Algebra_Solution_2026-07-23.pdf');
   });
 
-  it('only calls createDirectory once across multiple writes to the same Fach directory', async () => {
+  it('only calls createDirectory once across multiple writes to the same subject directory', async () => {
     const client = makeFakeClient();
     const writer = createNextcloudWriter({ webdavClient: client });
 

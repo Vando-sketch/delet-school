@@ -53,8 +53,11 @@ export const config = {
     pollIntervalMs: Number(optional('TAILDROP_POLL_INTERVAL_MS', '5000')),
   },
   student: {
-    name: (): string => optional('STUDENT_NAME', 'Schüler'),
-    klasse: (): string => optional('STUDENT_KLASSE', 'Schule'),
+    name: (): string => optional('STUDENT_NAME', 'Student'),
+    className: (): string => optional('STUDENT_CLASS', 'School'),
+  },
+  output: {
+    language: (): string => optional('OUTPUT_LANGUAGE', 'English'),
   },
   poppler: {
     pdftotextBin: optional('PDFTOTEXT_BIN', 'pdftotext'),
@@ -71,8 +74,8 @@ export const config = {
   },
   pandoc: {
     binary: optional('PANDOC_BIN', 'pandoc'),
-    templatePath: optional('PANDOC_TEMPLATE_PATH', './docker/vorlage/template.html'),
-    cssPath: optional('PANDOC_CSS_PATH', './docker/vorlage/style.css'),
+    templatePath: optional('PANDOC_TEMPLATE_PATH', './docker/template/template.html'),
+    cssPath: optional('PANDOC_CSS_PATH', './docker/template/style.css'),
     weasyprintBinary: optional('WEASYPRINT_BIN', './.venv/bin/weasyprint'),
   },
   dictionary: {

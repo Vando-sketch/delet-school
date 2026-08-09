@@ -63,7 +63,7 @@ Command: `npm test -- test/nextcloudWriter.test.ts` (run against the rewritten
 
 Output:
 ```
- RUN  v2.1.9 /Users/elias/Programms/delet-school
+ RUN  v2.1.9 /Programms/delet-school
 ...
  ✓ test/nextcloudWriter.test.ts (7 tests) 35ms
 
