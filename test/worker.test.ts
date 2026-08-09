@@ -34,17 +34,17 @@ process.env.INGEST_WATCH_DIR = '/inbox';
 
 const AUFGABENBLATT_RESULT = {
   originalFileName: 'arbeitsblatt1.pdf',
-  isMaterialblatt: false,
-  fach: 'BGWP',
-  thema: 'Kaufvertragsrecht',
+  isReferenceSheet: false,
+  subject: 'Math',
+  topic: 'Kaufvertragsrecht',
   tasksFound: [{ title: 't', taskDescription: 'q', proposedSolution: 'a' }],
 };
 
 const MATERIAL_RESULT = {
   originalFileName: 'handout.pdf',
-  isMaterialblatt: true,
-  fach: 'Deutsch',
-  thema: 'Grammatikregeln',
+  isReferenceSheet: true,
+  subject: 'History',
+  topic: 'Grammatikregeln',
   tasksFound: [],
 };
 
