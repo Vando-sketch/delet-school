@@ -117,7 +117,10 @@ log_step "Installing the Claude Code CLI"
 if command -v claude >/dev/null 2>&1; then
   log "claude CLI already installed ($(command -v claude)), skipping"
 else
-  run_logged npm install -g @anthropic-ai/claude-code
+  # Global installs write into npm's system prefix (e.g. /usr/lib/node_modules when Node
+  # came from a system package manager) - needs the same root/sudo handling as apt-get/dnf
+  # above, or it fails with EACCES for a non-root user.
+  run_logged "${SUDO[@]}" npm install -g @anthropic-ai/claude-code
 fi
 
 # --- 5. agy (Antigravity) CLI (Gemini primary solver path) --------------------------------
