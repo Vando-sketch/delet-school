@@ -27,9 +27,9 @@ Worker
         │      Claude vision (handwriting or still-garbled OCR)
         ├─ 2. Claude Agent SDK: classify subject, solve every task with citations
         ├─ 3. Render a styled solution PDF (pandoc + weasyprint) — or, for a pure
-        │      Materialblatt (no tasks), skip straight to filing the source
+        │      reference sheet (no tasks), skip straight to filing the source
         ├─ 4. Write into Nextcloud over WebDAV (via Tailscale):
-        │      Subjects/<Subject>/[<Module>/]<name>_Loesung_<date>.pdf
+        │      Subjects/<Subject>/[<Module>/]<name>_Solution_<date>.pdf
         └─ 5. Archive the source (OCR'd searchable version if OCR ran) into `.processed/`
              (or `.failed/` on error)
 ```
@@ -43,8 +43,8 @@ Worker
 - `src/extract/` — per-page tiered text extraction: MarkItDown for text-layer PDFs,
   `ocrmypdf`/Tesseract for scans, rendered page images for Claude's vision fallback on
   handwriting or still-garbled OCR output.
-- `src/claude/` — Claude Agent SDK integration that classifies the subject (Fach) and
-  Info-/Materialblatt vs. Aufgabenblatt, and solves every task found with citations.
+- `src/claude/` — Claude Agent SDK integration that classifies the subject and
+  reference sheet vs. task sheet, and solves every task found with citations.
 - `src/pdf/` — builds the solution Markdown and renders it to a styled PDF via
   `pandoc`+`weasyprint`.
 - `src/nextcloud/` — writes the result into Nextcloud under `Subjects/<Subject>/[<Module>/]` over
