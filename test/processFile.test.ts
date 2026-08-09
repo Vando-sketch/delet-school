@@ -34,9 +34,9 @@ function makeResultMessage(fields: Record<string, unknown>): SDKMessage {
 }
 
 const PASS1_OUTPUT = {
-  isMaterialblatt: false,
-  fach: 'BGWP',
-  thema: 'Kaufvertragsrecht',
+  isReferenceSheet: false,
+  subject: 'Math',
+  topic: 'Kaufvertragsrecht',
 };
 
 const PASS2_OUTPUT = {
@@ -45,7 +45,7 @@ const PASS2_OUTPUT = {
       title: 'Mangelhafte Lieferung',
       taskDescription: 'Welche Rechte hat der Käufer bei einem Sachmangel?',
       proposedSolution: 'Nacherfüllung nach § 439 BGB.',
-      quelle: '§ 437, § 439 BGB',
+      source: '§ 437, § 439 BGB',
     },
   ],
 };
@@ -97,9 +97,9 @@ describe('createFileProcessor', () => {
 
     expect(result).toEqual({
       originalFileName: 'arbeitsblatt1.pdf',
-      isMaterialblatt: false,
-      fach: 'BGWP',
-      thema: 'Kaufvertragsrecht',
+      isReferenceSheet: false,
+      subject: 'Math',
+      topic: 'Kaufvertragsrecht',
       tasksFound: PASS2_OUTPUT.tasksFound,
     });
   });
@@ -201,7 +201,7 @@ describe('createFileProcessor', () => {
 
   it('throws a clear error when the parsed JSON is missing required fields', async () => {
     const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: { unrelated: true } }), agyRunner: failingAgyRunner });
-    await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/isMaterialblatt/);
+    await expect(processor.processFile('arbeitsblatt1.pdf', makeExtraction())).rejects.toThrow(/isReferenceSheet/);
   });
 
   it('throws a clear error when the SDK query itself fails (non-success subtype)', async () => {
@@ -334,12 +334,12 @@ describe('createFileProcessor', () => {
     expect(promptWithEmptyArray).toBe(promptWithoutArg);
   });
 
-  it('returns isMaterialblatt=true with an empty tasksFound for reference material', async () => {
-    const materialOutput = { isMaterialblatt: true, fach: 'Deutsch', thema: 'Grammatikregeln' };
+  it('returns isReferenceSheet=true with an empty tasksFound for reference material', async () => {
+    const materialOutput = { isReferenceSheet: true, subject: 'Science', topic: 'Grammatikregeln' };
     const processor = createFileProcessor({ queryFn: createDoubleFakeQuery({ output: materialOutput }), agyRunner: failingAgyRunner });
     const result = await processor.processFile('handout.pdf', makeExtraction());
 
-    expect(result.isMaterialblatt).toBe(true);
+    expect(result.isReferenceSheet).toBe(true);
     expect(result.tasksFound).toEqual([]);
   });
 
@@ -366,9 +366,9 @@ describe('createFileProcessor', () => {
       expect(queryFnCalled).toBe(false);
       expect(result).toEqual({
         originalFileName: 'arbeitsblatt1.pdf',
-        isMaterialblatt: false,
-        fach: 'BGWP',
-        thema: 'Kaufvertragsrecht',
+        isReferenceSheet: false,
+        subject: 'Math',
+        topic: 'Kaufvertragsrecht',
         tasksFound: PASS2_OUTPUT.tasksFound,
       });
 
@@ -389,7 +389,7 @@ describe('createFileProcessor', () => {
       const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: fakeAgyRunner });
       const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
-      expect(result.fach).toBe('BGWP');
+      expect(result.subject).toBe('Math');
       expect(result.tasksFound).toHaveLength(1);
     });
 
@@ -398,7 +398,7 @@ describe('createFileProcessor', () => {
       const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: fakeAgyRunner });
       const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
-      expect(result.fach).toBe('BGWP');
+      expect(result.subject).toBe('Math');
       expect(result.tasksFound).toHaveLength(1);
     });
 
@@ -407,7 +407,7 @@ describe('createFileProcessor', () => {
       const processor = createFileProcessor({ queryFn: createDoubleFakeQuery(), agyRunner: fakeAgyRunner });
       const result = await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
 
-      expect(result.fach).toBe('BGWP');
+      expect(result.subject).toBe('Math');
       expect(result.tasksFound).toHaveLength(1);
     });
 
@@ -450,9 +450,9 @@ describe('createFileProcessor', () => {
       if (pIdx !== -1) capturedAgyPrompt = args[pIdx + 1] ?? '';
       return {
         stdout: JSON.stringify({
-          isMaterialblatt: true,
-          fach: 'BGWP',
-          thema: 'Test',
+          isReferenceSheet: true,
+          subject: 'Math',
+          topic: 'Test',
         }),
         stderr: '',
         exitCode: 0,
@@ -465,8 +465,8 @@ describe('createFileProcessor', () => {
     });
     await processor.processFile('test.pdf', makeExtraction());
 
-    expect(capturedAgyPrompt).toContain('AUSSCHLIESSLICH');
-    expect(capturedAgyPrompt).toContain('DATEN-STRENGER-BEZUG');
+    expect(capturedAgyPrompt).toContain('ONLY');
+    expect(capturedAgyPrompt).toContain('STRICT DATA ADHERENCE');
   });
 
   it('includes tabular formatting instruction in the agy prompt', async () => {
@@ -476,9 +476,9 @@ describe('createFileProcessor', () => {
       if (pIdx !== -1) capturedAgyPrompt = args[pIdx + 1] ?? '';
       return {
         stdout: JSON.stringify({
-          isMaterialblatt: true,
-          fach: 'BGWP',
-          thema: 'Test',
+          isReferenceSheet: true,
+          subject: 'Math',
+          topic: 'Test',
         }),
         stderr: '',
         exitCode: 0,
@@ -491,9 +491,9 @@ describe('createFileProcessor', () => {
     });
     await processor.processFile('test.pdf', makeExtraction());
 
-    expect(capturedAgyPrompt).toContain('TABELLARISCHE');
-    expect(capturedAgyPrompt).toContain('Markdown-Tabelle');
-    expect(capturedAgyPrompt).toContain('| Position');
+    expect(capturedAgyPrompt).toContain('TABULAR');
+    expect(capturedAgyPrompt).toContain('Markdown table');
+    expect(capturedAgyPrompt).toContain('| Item');
   });
 
   it('includes strict data adherence instruction in the Claude systemPrompt', async () => {
@@ -520,8 +520,8 @@ describe('createFileProcessor', () => {
     const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: failingAgyRunner });
     await processor.processFile('test.pdf', makeExtraction());
 
-    expect(capturedSystemPrompt).toContain('AUSSCHLIESSLICH');
-    expect(capturedSystemPrompt).toContain('DATEN-STRENGER-BEZUG');
+    expect(capturedSystemPrompt).toContain('ONLY');
+    expect(capturedSystemPrompt).toContain('STRICT DATA ADHERENCE');
   });
 
   it('includes websearch instruction for uncertainty clarification in the system prompt', async () => {
@@ -548,51 +548,79 @@ describe('createFileProcessor', () => {
     const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: failingAgyRunner });
     await processor.processFile('test.pdf', makeExtraction());
 
-    expect(capturedSystemPrompt).toContain('Websearch');
-    expect(capturedSystemPrompt).toContain('GERINGFÜGIG UNSICHER');
+    expect(capturedSystemPrompt).toContain('web search');
+    expect(capturedSystemPrompt).toContain('SLIGHTLY UNSURE');
   });
 });
 
-describe('Pass 2 Schema and Validation for hintergrundKontext', () => {
-  it('includes hintergrundKontext in PASS2_JSON_SCHEMA properties', () => {
-    const props = (PASS2_JSON_SCHEMA as { properties: Record<string, { type: string }> }).properties;
-    expect(props).toHaveProperty('hintergrundKontext');
-    expect(props.hintergrundKontext.type).toBe('string');
+
+  it('includes an output-language directive in the system prompt sent to the SDK', async () => {
+    let capturedSystemPrompt: unknown;
+    let callCount = 0;
+    const fakeQuery: QueryFn = async function* (params) {
+      callCount++;
+      if (callCount === 1) {
+        capturedSystemPrompt = params.options?.systemPrompt;
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS1_OUTPUT),
+          structured_output: PASS1_OUTPUT,
+        });
+      } else {
+        yield makeResultMessage({
+          subtype: 'success',
+          result: JSON.stringify(PASS2_OUTPUT),
+          structured_output: PASS2_OUTPUT,
+        });
+      }
+    };
+
+    const processor = createFileProcessor({ queryFn: fakeQuery, agyRunner: failingAgyRunner });
+    await processor.processFile('arbeitsblatt1.pdf', makeExtraction());
+
+    expect(capturedSystemPrompt).toMatch(/Respond in English/);
   });
 
-  it('validates and extracts hintergrundKontext when present', () => {
+describe('Pass 2 Schema and Validation for backgroundContext', () => {
+  it('includes backgroundContext in PASS2_JSON_SCHEMA properties', () => {
+    const props = (PASS2_JSON_SCHEMA as { properties: Record<string, { type: string }> }).properties;
+    expect(props).toHaveProperty('backgroundContext');
+    expect(props.backgroundContext.type).toBe('string');
+  });
+
+  it('validates and extracts backgroundContext when present', () => {
     const validJson = JSON.stringify({
-      hintergrundKontext: 'Szenario: Firma IT-Systeme AG plant ein neues Netzwerk.',
+      backgroundContext: 'Szenario: Firma IT-Systeme AG plant ein neues Netzwerk.',
       tasksFound: [
         {
           title: 'Aufgabe 1',
           taskDescription: 'Welche Topologie?',
           proposedSolution: 'Stern-Topologie',
-          quelle: 'Seite 1',
+          source: 'Seite 1',
         },
       ],
     });
 
     const result = validateShapePass2(validJson);
-    expect(result.hintergrundKontext).toBe('Szenario: Firma IT-Systeme AG plant ein neues Netzwerk.');
+    expect(result.backgroundContext).toBe('Szenario: Firma IT-Systeme AG plant ein neues Netzwerk.');
     expect(result.tasksFound).toHaveLength(1);
     expect(result.tasksFound[0].title).toBe('Aufgabe 1');
   });
 
-  it('handles missing hintergrundKontext gracefully', () => {
+  it('handles missing backgroundContext gracefully', () => {
     const validJson = JSON.stringify({
       tasksFound: [
         {
           title: 'Aufgabe 1',
           taskDescription: 'Frage',
           proposedSolution: 'Antwort',
-          quelle: 'Seite 1',
+          source: 'Seite 1',
         },
       ],
     });
 
     const result = validateShapePass2(validJson);
-    expect(result.hintergrundKontext).toBeUndefined();
+    expect(result.backgroundContext).toBeUndefined();
     expect(result.tasksFound).toHaveLength(1);
   });
 });
