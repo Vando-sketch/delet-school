@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { config } from '../config/index.js';
-import { FACH_KEYS } from '../fach.js';
+import { SUBJECT_KEYS } from '../subjects.js';
 
 export type WordValidator = (word: string) => boolean;
 
 // Subject codes and legal-citation abbreviations are expected, legitimate vocabulary in this
 // document domain but won't appear in a general dictionary.
-const DOMAIN_WHITELIST = [...FACH_KEYS.map((key) => key.toLowerCase()), 'bgb', 'lf', 'gg', 'stgb', 'hgb'];
+const DOMAIN_WHITELIST = [...SUBJECT_KEYS.map((key) => key.toLowerCase()), 'bgb', 'lf', 'gg', 'stgb', 'hgb'];
 
 export interface LoadWordSetDeps {
   readFileSync?: (path: string) => string;
