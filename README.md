@@ -61,33 +61,29 @@ Worker
 
 ## Setup
 
-Requires, beyond `npm install` (installed automatically inside `docker/Dockerfile` for the
-Docker path below — only needed manually for running `dev:ingest`/`dev:worker` directly on the
-host):
-
-- Node.js >= 20, and a running Redis instance (`REDIS_URL`, defaults to `redis://localhost:6379`)
-  for the BullMQ job queue.
-- PDF/OCR toolchain: `poppler-utils` (`pdftotext`/`pdftoppm`/`pdfinfo`), `ocrmypdf`,
-  `tesseract-ocr` (+ `tesseract-ocr-deu`/`tesseract-ocr-eng` language packs), `pandoc`,
-  `hunspell-de-de`/`hunspell-en-us` (used by the OCR-quality dictionary gate). Override the
-  binary paths via `PDFTOTEXT_BIN`/`PDFTOPPM_BIN`/`PDFINFO_BIN`/`OCRMYPDF_BIN`/`PANDOC_BIN`/
-  `HUNSPELL_DE_DIC_PATH`/`HUNSPELL_EN_DIC_PATH` in `.env` if they're not on `PATH` at the
-  defaults.
-- `markitdown` and `weasyprint`, in a Python venv (`python3 -m venv .venv && .venv/bin/pip
-  install markitdown weasyprint`) — Debian blocks a bare `pip install` outside a venv. Point
-  `MARKITDOWN_BIN`/`WEASYPRINT_BIN` at the venv's binaries.
-- The [`agy`](https://antigravity.google/cli) CLI, authenticated once interactively
-  (`agy` prompts for Google/Antigravity login on first run) — see the Gemini/`agy` paragraph
-  below for what it's for and its fallback behavior.
+One command installs everything needed to run outside Docker: system PDF/OCR toolchain
+(`poppler-utils`, `ocrmypdf`, `tesseract-ocr` + language packs, `pandoc`, `hunspell`
+dictionaries — via `apt-get`/`dnf`/`brew`, whichever is found), a Python venv with
+`markitdown`+`weasyprint`, npm dependencies, the `claude` CLI, and the `agy` CLI (installed only
+if not already on `PATH`; prompts for `sudo` for system packages). Safe to re-run. Also scaffolds
+`.env` from `.env.example` if it doesn't exist yet. Logs to both the terminal and `setup.log`.
 
 ```bash
-npm install
-cp .env.example .env   # fill in STUDENT_NAME, STUDENT_CLASS, INGEST_WATCH_DIR + Nextcloud values
+npm run setup
+```
+
+(Skipped automatically inside Docker — `docker/Dockerfile` installs the same system
+dependencies directly into the image; see the Docker section below.) A running Redis instance
+is still required separately (`REDIS_URL`, defaults to `redis://localhost:6379`) — `npm run
+setup` doesn't install or start one.
+
+```bash
+# edit .env (created by npm run setup) - fill in Nextcloud/Tailscale values, see below
 npm run dev:ingest     # local folder watcher
 npm run dev:worker     # local worker
 ```
 
-`STUDENT_NAME` and `STUDENT_CLASS` are required and used to personalize solution output. `SUBJECTS` and `OUTPUT_LANGUAGE` are also configurable (see `.env.example` for format).
+`STUDENT_NAME` and `STUDENT_CLASS` are required and used to personalize solution output. `SUBJECTS` and `OUTPUT_LANGUAGE` are also configurable (see `.env.example` for format). Binary paths for the PDF/OCR toolchain (`PDFTOTEXT_BIN`, `PDFTOPPM_BIN`, `PDFINFO_BIN`, `OCRMYPDF_BIN`, `PANDOC_BIN`, `HUNSPELL_DE_DIC_PATH`, `HUNSPELL_EN_DIC_PATH`, `MARKITDOWN_BIN`, `WEASYPRINT_BIN`) are all overridable in `.env` if `npm run setup` installed them somewhere non-standard, or you installed them manually.
 
 `INGEST_WATCH_DIR` defaults to `__INBOX__` in the root of the project directory - files land
 there via the Tailscale sidecar draining Taildrop sends into it (see below), so it doesn't need

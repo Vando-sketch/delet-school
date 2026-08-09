@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "setup": "bash scripts/setup.sh",
     "dev:ingest": "tsx watch src/ingest/watcher.ts",
     "dev:worker": "tsx watch src/worker/index.ts",
     "build": "tsc -p tsconfig.json",
