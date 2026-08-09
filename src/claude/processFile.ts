@@ -389,7 +389,7 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       }
 
       if (pass1Result.isReferenceSheet) {
-        logger.info({ fileName, isReferenceSheet: true }, 'Solve complete (Materialblatt, skipping Pass 2)');
+        logger.info({ fileName, isReferenceSheet: true }, 'Solve complete (reference sheet, skipping Pass 2)');
         return {
           originalFileName: fileName,
           isReferenceSheet: true,
@@ -401,7 +401,6 @@ export function createFileProcessor(options: CreateFileProcessorOptions = {}): F
       }
 
       logger.info({ fileName }, 'File contains tasks, starting Pass 2 (Solving)');
-      // Need a space before Hinweis... but I'll use the one from the plan
       const pass2PromptText = promptText + `\n\nHint from Pass 1: subject=${pass1Result.subject}, topic=${pass1Result.topic}. Please solve the tasks.`;
       let pass2Result: ReturnType<typeof validateShapePass2> | undefined;
       const pass2Language = subjectLanguage(pass1Result.subject) ?? config.output.language();
