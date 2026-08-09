@@ -31,6 +31,20 @@ run_logged() {
   "$@" 2>&1 | tee -a "$LOG_FILE"
 }
 
+# Root (common in minimal containers/LXC) usually has no `sudo` binary at all, and doesn't
+# need one - `sudo` would just fail with "command not found". Only prefix with sudo when
+# actually not root, and only if sudo is actually present.
+SUDO=()
+if [ "$(id -u)" -ne 0 ]; then
+  if command -v sudo >/dev/null 2>&1; then
+    SUDO=(sudo)
+  else
+    log "Not running as root and no 'sudo' found - system package installs below will" \
+      "likely fail. Re-run as root, install sudo first, or install the packages manually" \
+      "(see README.md 'Setup')."
+  fi
+fi
+
 log_step "delet-school setup starting (full output also written to $LOG_FILE)"
 
 # --- 1. System PDF/OCR/pandoc toolchain -------------------------------------------------
@@ -38,8 +52,8 @@ log_step "Installing system dependencies"
 
 if command -v apt-get >/dev/null 2>&1; then
   log "Detected apt-get (Debian/Ubuntu) - installing via apt"
-  run_logged sudo apt-get update
-  run_logged sudo apt-get install -y --no-install-recommends \
+  run_logged "${SUDO[@]}" apt-get update
+  run_logged "${SUDO[@]}" apt-get install -y --no-install-recommends \
     poppler-utils \
     ocrmypdf \
     tesseract-ocr \
@@ -57,7 +71,7 @@ if command -v apt-get >/dev/null 2>&1; then
 elif command -v dnf >/dev/null 2>&1; then
   log "Detected dnf (Fedora/RHEL) - installing via dnf (best-effort; the apt path above" \
     "mirrors docker/Dockerfile and is what's actually tested)"
-  run_logged sudo dnf install -y \
+  run_logged "${SUDO[@]}" dnf install -y \
     poppler-utils \
     ocrmypdf \
     tesseract \
