@@ -130,7 +130,7 @@ describe('worker pipeline', () => {
     expect(rm).toHaveBeenCalledWith('/inbox/scan.pdf', { force: true });
   });
 
-  it('skips PDF generation and writes the archival source directly for a Materialblatt', async () => {
+  it('skips PDF generation and writes the archival source directly for a reference sheet', async () => {
     extractFile.mockResolvedValue({ markdown: '# text', visionPages: [], ranOcr: false, archivalPdfPath: '/inbox/handout.pdf' });
     processFile.mockResolvedValue(MATERIAL_RESULT);
     writeResult.mockResolvedValue({ writtenPath: '/data/alice/files/Subjects/History/Reference/handout_2026-07-23.pdf' });
