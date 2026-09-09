@@ -152,6 +152,16 @@ Beyond the vars covered above, Docker-only requirements in `.env`:
 - `npm run typecheck` / `npm run lint` / `npm test` — must all pass before opening a PR (see `CLAUDE.md`).
 - `npm run build` — compiles to `dist/`.
 
+## Planned: paperless-ngx integration
+
+The next larger change moves paperless-ngx to the *front* of this pipeline — it becomes the
+ingest front end, document store, and search layer, and delet-school shrinks to classification,
+task solving, and vision-based text recovery. Rationale, division of responsibility, and the
+rejected alternatives are in
+`docs/superpowers/specs/2026-09-09-paperless-ngx-integration-design.md`; the task breakdown is in
+`docs/superpowers/plans/2026-09-09-paperless-ngx-integration.md`. Nothing in the flow described
+above has changed yet.
+
 ## Known open items
 
 - **Breaking change (Nextcloud config)**: The old `NEXTCLOUD_DATA_DIR`, `NEXTCLOUD_TARGET_USER`,
