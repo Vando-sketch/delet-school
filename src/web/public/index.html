@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Home Hub - Documents & Banking</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base: #0f172a;
+      --bg-surface: #1e293b;
+      --bg-surface-hover: #334155;
+      --bg-card: #1e293b;
+      --border-color: #334155;
+      --border-focus: #3b82f6;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-blue: #3b82f6;
+      --accent-green: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-red: #ef4444;
+      --accent-purple: #8b5cf6;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+      padding: 0.85rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .brand-logo {
+      width: 34px;
+      height: 34px;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1.1rem;
+      color: white;
+    }
+    .brand-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .brand-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .status-indicators {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      padding: 0.25rem 0.6rem;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+    }
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-green);
+    }
+    .badge-dot.amber { background: var(--accent-amber); }
+    .badge-dot.red { background: var(--accent-red); }
+
+    nav.tab-bar {
+      display: flex;
+      gap: 0.5rem;
+      background: rgba(15, 23, 42, 0.75);
+      padding: 0.5rem 1.5rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+      font-weight: 500;
+      padding: 0.5rem 0.85rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .tab-btn:hover {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+    }
+    .tab-btn.active {
+      background: var(--accent-blue);
+      color: white;
+    }
+
+    main {
+      flex: 1;
+      padding: 1.5rem;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .tab-pane {
+      display: none;
+    }
+    .tab-pane.active {
+      display: block;
+      animation: fadeIn 0.2s ease-in-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1.25rem;
+      position: relative;
+    }
+    .card-title {
+      font-size: 0.8rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+      margin-bottom: 0.5rem;
+    }
+    .card-val {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    .card-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.35rem;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: var(--accent-blue);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 0.5rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .btn:hover { background: #2563eb; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-secondary {
+      background: var(--bg-surface-hover);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+    .btn-secondary:hover { background: #475569; }
+    .btn-success { background: var(--accent-green); }
+    .btn-success:hover { background: #059669; }
+
+    /* Dropzone */
+    .dropzone {
+      border: 2px dashed var(--border-color);
+      background: rgba(30, 41, 59, 0.4);
+      border-radius: 12px;
+      padding: 3rem 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-bottom: 1.5rem;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: var(--accent-blue);
+      background: rgba(59, 130, 246, 0.08);
+    }
+    .dropzone-icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.75rem;
+      color: var(--accent-blue);
+    }
+    .dropzone-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+    .dropzone-sub {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    /* Tables */
+    .table-container {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.875rem;
+    }
+    th {
+      background: rgba(15, 23, 42, 0.5);
+      color: var(--text-secondary);
+      font-weight: 600;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+    td {
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border-color);
+      color: var(--text-primary);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+
+    .amount-pos { color: var(--accent-green); font-weight: 600; font-family: var(--font-mono); }
+    .amount-neg { color: var(--text-primary); font-weight: 600; font-family: var(--font-mono); }
+    .mono { font-family: var(--font-mono); font-size: 0.8rem; }
+
+    /* TAN Challenge Banner */
+    .tan-challenge-card {
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid var(--accent-amber);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .tan-title {
+      font-weight: 600;
+      color: var(--accent-amber);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .tan-input-group {
+      display: flex;
+      gap: 0.5rem;
+      max-width: 400px;
+    }
+    .tan-input {
+      background: var(--bg-base);
+      border: 1px solid var(--border-color);
+      color: white;
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 1rem;
+      flex: 1;
+    }
+
+    .account-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .account-card {
+      background: linear-gradient(145deg, #1e293b, #172033);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.25rem;
+    }
+    .account-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 0.75rem;
+    }
+    .account-name { font-weight: 600; font-size: 1.05rem; }
+    .account-iban { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.2rem; }
+    .account-balance { font-size: 1.75rem; font-weight: 700; color: var(--text-primary); margin-top: 0.5rem; }
+
+    footer {
+      border-top: 1px solid var(--border-color);
+      padding: 1rem 1.5rem;
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: auto;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="brand-logo">H</div>
+      <div>
+        <div class="brand-title">Home Hub</div>
+        <div class="brand-sub">Tailnet Document &amp; Banking Pipeline</div>
+      </div>
+    </div>
+    <div class="status-indicators">
+      <div class="badge" id="badge-tailscale">
+        <span class="badge-dot"></span> Tailnet Active
+      </div>
+      <div class="badge" id="badge-queue">
+        <span class="badge-dot" id="dot-queue"></span> Queue: <span id="hdr-queue-count">0</span>
+      </div>
+      <div class="badge" id="badge-banking">
+        <span class="badge-dot" id="dot-banking"></span> Bank Connected
+      </div>
+    </div>
+  </header>
+
+  <nav class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('overview')">📊 Overview</button>
+    <button class="tab-btn" onclick="switchTab('banking')">🏦 Banking (FinTS)</button>
+    <button class="tab-btn" onclick="switchTab('upload')">📤 Dropzone</button>
+    <button class="tab-btn" onclick="switchTab('queue')">⚡ Pipeline Jobs</button>
+    <button class="tab-btn" onclick="switchTab('archive')">📁 Processed Documents</button>
+  </nav>
+
+  <main>
+    <!-- 1. OVERVIEW TAB -->
+    <section id="tab-overview" class="tab-pane active">
+      <div class="grid-4">
+        <div class="card">
+          <div class="card-title">Total Bank Balance</div>
+          <div class="card-val" id="ov-total-balance">€0.00</div>
+          <div class="card-meta" id="ov-last-sync">Last synced: Never</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Pending Jobs</div>
+          <div class="card-val" id="ov-pending-jobs">0</div>
+          <div class="card-meta">In queue right now</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Bank Statements</div>
+          <div class="card-val" id="ov-statement-count">0</div>
+          <div class="card-meta">Auto-ingested &amp; filed</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Processed Files</div>
+          <div class="card-val" id="ov-processed-files">0</div>
+          <div class="card-meta">Solutions written to Nextcloud</div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem;">
+        <button class="btn" onclick="triggerBankSync()">🔄 Sync Bank Now</button>
+        <button class="btn btn-secondary" onclick="switchTab('upload')">📤 Upload Document</button>
+      </div>
+
+      <div id="overview-tan-alert" style="display: none;"></div>
+
+      <div style="margin-top: 1rem;">
+        <h3 style="margin-bottom: 0.75rem; font-size: 1rem;">Recent Transactions</h3>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Recipient / Payer</th>
+                <th>Purpose</th>
+                <th style="text-align: right;">Amount</th>
+              </tr>
+            </thead>
+            <tbody id="ov-transactions-body">
+              <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading transactions...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. BANKING TAB -->
+    <section id="tab-banking" class="tab-pane">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div>
+          <h2 style="font-size: 1.25rem;">German &amp; European Banking (FinTS/HBCI)</h2>
+          <p style="font-size: 0.85rem; color: var(--text-secondary);">Direct connection to Sparkasse, DKB, ING, Volksbank, Commerzbank</p>
+        </div>
+        <button class="btn" id="btn-sync-bank" onclick="triggerBankSync()">
+          <span>🔄</span> <span id="sync-btn-text">Sync Accounts &amp; Statements</span>
+        </button>
+      </div>
+
+      <!-- Pending TAN Challenge Container -->
+      <div id="tan-challenge-container" style="display: none;"></div>
+
+      <!-- Accounts Cards -->
+      <div class="account-cards" id="account-cards-container">
+        <!-- Rendered via JS -->
+      </div>
+
+      <!-- Statements Section -->
+      <div style="margin-bottom: 1.5rem;">
+        <h3 style="margin-bottom: 0.75rem; font-size: 1rem;">Electronic Bank Statements (Kontoauszüge)</h3>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Document Name</th>
+                <th>Account</th>
+                <th>Pipeline Status</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="statements-body">
+              <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No statements fetched yet. Click "Sync Accounts &amp; Statements".</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- All Transactions Section -->
+      <div>
+        <h3 style="margin-bottom: 0.75rem; font-size: 1rem;">Transaction History</h3>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Recipient / Payer</th>
+                <th>Purpose</th>
+                <th>Type</th>
+                <th style="text-align: right;">Amount</th>
+              </tr>
+            </thead>
+            <tbody id="all-transactions-body">
+              <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading transactions...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. UPLOAD DROPZONE TAB -->
+    <section id="tab-upload" class="tab-pane">
+      <h2 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Upload Documents to Pipeline</h2>
+      <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
+        Drop any file (PDF, Zip archive, Office doc, scan) here from any device on your tailnet. It will be placed into the inbox, processed, OCR'd, and filed into Nextcloud.
+      </p>
+
+      <div class="dropzone" id="dropzone" onclick="document.getElementById('file-input').click()">
+        <div class="dropzone-icon">📄</div>
+        <div class="dropzone-title">Drop documents here or click to browse</div>
+        <div class="dropzone-sub">Supports PDF, ZIP, Images, DOCX, TXT (auto-enqueued into BullMQ queue)</div>
+        <input type="file" id="file-input" multiple style="display: none;" onchange="handleFilesSelected(this.files)">
+      </div>
+
+      <div id="upload-status" style="margin-top: 1rem; display: none;"></div>
+    </section>
+
+    <!-- 4. QUEUE & JOBS TAB -->
+    <section id="tab-queue" class="tab-pane">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div>
+          <h2 style="font-size: 1.25rem;">Processing Queue</h2>
+          <p style="font-size: 0.85rem; color: var(--text-secondary);">Live BullMQ worker jobs and tasks</p>
+        </div>
+        <button class="btn btn-secondary" onclick="loadQueue()">🔄 Refresh Queue</button>
+      </div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>File Name</th>
+              <th>Status</th>
+              <th>Enqueued At</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="queue-body">
+            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading queue...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 5. ARCHIVE TAB -->
+    <section id="tab-archive" class="tab-pane">
+      <h2 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Processed Archive</h2>
+      <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
+        Files processed by the worker and synced to Nextcloud
+      </p>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Filename</th>
+              <th>Category</th>
+              <th>Processed Date</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="archive-body">
+            <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading archive...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Tailnet: <span id="footer-hostname">delet-school</span> &bull; Web Port: 3000 &bull; Home Server Deployment
+  </footer>
+
+  <script>
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      
+      const btn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
+      if (btn) btn.classList.add('active');
+      
+      const pane = document.getElementById('tab-' + tabId);
+      if (pane) pane.classList.add('active');
+
+      if (tabId === 'banking') loadBanking();
+      if (tabId === 'queue') loadQueue();
+      if (tabId === 'archive') loadArchive();
+    }
+
+    // Format currency EUR
+    function formatEUR(val) {
+      return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(val);
+    }
+
+    // Load overall status & banking
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        
+        document.getElementById('hdr-queue-count').innerText = data.queue?.waiting || '0';
+        document.getElementById('ov-pending-jobs').innerText = (data.queue?.waiting || 0) + (data.queue?.active || 0);
+
+        if (data.tailscale?.hostname) {
+          document.getElementById('footer-hostname').innerText = data.tailscale.hostname;
+        }
+
+        loadBanking();
+      } catch (err) {
+        console.error('Failed to load status', err);
+      }
+    }
+
+    async function loadBanking() {
+      try {
+        const res = await fetch('/api/banking/accounts');
+        const data = await res.json();
+
+        // Check TAN challenge
+        renderTanChallenge(data.pendingTan);
+
+        // Render total balance
+        let total = 0;
+        if (data.accounts && data.accounts.length) {
+          total = data.accounts.reduce((sum, a) => sum + (a.balance?.amount || 0), 0);
+        }
+        document.getElementById('ov-total-balance').innerText = formatEUR(total);
+        if (data.lastSyncAt) {
+          document.getElementById('ov-last-sync').innerText = 'Last synced: ' + new Date(data.lastSyncAt).toLocaleTimeString();
+        }
+
+        // Render account cards
+        const container = document.getElementById('account-cards-container');
+        if (data.accounts && data.accounts.length) {
+          container.innerHTML = data.accounts.map(acc => `
+            <div class="account-card">
+              <div class="account-header">
+                <div>
+                  <div class="account-name">${acc.bankName || 'Girokonto'}</div>
+                  <div class="account-iban">${acc.iban}</div>
+                </div>
+                <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border-color: rgba(16, 185, 129, 0.3);">
+                  BIC: ${acc.bic || 'N/A'}
+                </span>
+              </div>
+              <div class="account-balance">${acc.balance ? formatEUR(acc.balance.amount) : '€ --'}</div>
+            </div>
+          `).join('');
+        } else {
+          container.innerHTML = `<div class="card" style="grid-column: 1 / -1; text-align: center; color: var(--text-secondary);">No accounts configured yet. Configure FINTS_BLZ &amp; FINTS_USER in .env or run sync.</div>`;
+        }
+
+        // Load Transactions & Statements
+        loadTransactions();
+        loadStatements();
+      } catch (err) {
+        console.error('Failed to load banking', err);
+      }
+    }
+
+    function renderTanChallenge(challenge) {
+      const container = document.getElementById('tan-challenge-container');
+      const overviewAlert = document.getElementById('overview-tan-alert');
+      if (!challenge) {
+        container.style.display = 'none';
+        overviewAlert.style.display = 'none';
+        return;
+      }
+
+      const html = `
+        <div class="tan-challenge-card">
+          <div class="tan-title">
+            <span>⚠️</span> <strong>Bank Authentication Required (TAN / SCA)</strong>
+          </div>
+          <p style="font-size: 0.875rem;">${challenge.prompt}</p>
+          ${challenge.decoupled ? `
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <button class="btn btn-success" onclick="submitTanResponse('CONFIRMED')">✓ I Approved in Banking App</button>
+            </div>
+          ` : `
+            <div class="tan-input-group">
+              <input type="text" id="tan-code-input" class="tan-input" placeholder="Enter TAN code..." autofocus>
+              <button class="btn btn-success" onclick="submitTanCode()">Submit TAN</button>
+            </div>
+          `}
+        </div>
+      `;
+
+      container.innerHTML = html;
+      container.style.display = 'block';
+
+      overviewAlert.innerHTML = html;
+      overviewAlert.style.display = 'block';
+    }
+
+    async function submitTanCode() {
+      const input = document.getElementById('tan-code-input');
+      if (!input || !input.value) return;
+      await submitTanResponse(input.value.trim());
+    }
+
+    async function submitTanResponse(tan) {
+      try {
+        const res = await fetch('/api/banking/tan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tan })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert('TAN submitted successfully!');
+          loadBanking();
+        } else {
+          alert('Error: ' + (data.error || 'Failed to submit TAN'));
+        }
+      } catch (err) {
+        alert('Network error submitting TAN: ' + err.message);
+      }
+    }
+
+    async function loadTransactions() {
+      try {
+        const res = await fetch('/api/banking/transactions');
+        const data = await res.json();
+        const txs = data.transactions || [];
+
+        // Overview top 5
+        const ovBody = document.getElementById('ov-transactions-body');
+        if (!txs.length) {
+          ovBody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No transactions found.</td></tr>`;
+        } else {
+          ovBody.innerHTML = txs.slice(0, 5).map(renderTxRow).join('');
+        }
+
+        // All transactions
+        const allBody = document.getElementById('all-transactions-body');
+        if (!txs.length) {
+          allBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No transactions found.</td></tr>`;
+        } else {
+          allBody.innerHTML = txs.map(t => `
+            <tr>
+              <td class="mono">${t.date}</td>
+              <td><strong>${t.applicantName || 'Unknown'}</strong></td>
+              <td>${t.purpose || ''}</td>
+              <td><span class="badge">${t.postingText || 'SEPA'}</span></td>
+              <td style="text-align: right;" class="${t.amount >= 0 ? 'amount-pos' : 'amount-neg'}">${t.amount >= 0 ? '+' : ''}${formatEUR(t.amount)}</td>
+            </tr>
+          `).join('');
+        }
+      } catch (err) {
+        console.error('Failed to load txs', err);
+      }
+    }
+
+    function renderTxRow(t) {
+      return `
+        <tr>
+          <td class="mono">${t.date}</td>
+          <td><strong>${t.applicantName || 'Unknown'}</strong></td>
+          <td>${t.purpose || ''}</td>
+          <td style="text-align: right;" class="${t.amount >= 0 ? 'amount-pos' : 'amount-neg'}">${t.amount >= 0 ? '+' : ''}${formatEUR(t.amount)}</td>
+        </tr>
+      `;
+    }
+
+    async function loadStatements() {
+      try {
+        const res = await fetch('/api/banking/statements');
+        const data = await res.json();
+        const stmts = data.statements || [];
+
+        document.getElementById('ov-statement-count').innerText = stmts.length;
+
+        const tbody = document.getElementById('statements-body');
+        if (!stmts.length) {
+          tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No statements fetched yet. Click "Sync Accounts &amp; Statements".</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = stmts.map(s => `
+          <tr>
+            <td class="mono">${s.date}</td>
+            <td><strong>${s.filename}</strong></td>
+            <td class="mono">${s.accountIban || ''}</td>
+            <td>
+              ${s.autoIngested 
+                ? '<span class="badge" style="color: var(--accent-green);">✓ Ingested to Pipeline</span>' 
+                : '<span class="badge">Archived</span>'}
+            </td>
+            <td style="text-align: right;">
+              <a href="/api/banking/statements/${s.id}/download" target="_blank" class="btn btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;">Download PDF</a>
+            </td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error('Failed to load statements', err);
+      }
+    }
+
+    async function triggerBankSync() {
+      const btn = document.getElementById('btn-sync-bank');
+      if (btn) btn.disabled = true;
+      const text = document.getElementById('sync-btn-text');
+      if (text) text.innerText = 'Syncing with Bank...';
+
+      try {
+        const res = await fetch('/api/banking/sync', { method: 'POST' });
+        const data = await res.json();
+        if (data.tanChallenge) {
+          renderTanChallenge(data.tanChallenge);
+        } else if (data.success) {
+          alert(`Sync complete! Fetched ${data.transactionsCount} transactions and ${data.statementsCount} statements.`);
+        } else {
+          alert('Sync result: ' + (data.error || 'Failed'));
+        }
+        await loadBanking();
+      } catch (err) {
+        alert('Sync failed: ' + err.message);
+      } finally {
+        if (btn) btn.disabled = false;
+        if (text) text.innerText = 'Sync Accounts & Statements';
+      }
+    }
+
+    // Dropzone logic
+    const dropzone = document.getElementById('dropzone');
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+    dropzone.addEventListener('dragleave', () => {
+      dropzone.classList.remove('dragover');
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files.length) {
+        handleFilesSelected(e.dataTransfer.files);
+      }
+    });
+
+    async function handleFilesSelected(files) {
+      if (!files.length) return;
+      const statusDiv = document.getElementById('upload-status');
+      statusDiv.style.display = 'block';
+      statusDiv.innerHTML = `<div class="badge"><span class="badge-dot amber"></span> Uploading ${files.length} file(s)...</div>`;
+
+      const formData = new FormData();
+      for (let i = 0; i < files.length; i++) {
+        formData.append('files', files[i]);
+      }
+
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData
+        });
+        const result = await res.json();
+        if (result.success) {
+          statusDiv.innerHTML = `<div class="badge" style="color: var(--accent-green);"><span class="badge-dot"></span> Successfully uploaded ${result.count} file(s) directly to inbox! Enqueued for processing.</div>`;
+          loadStatus();
+        } else {
+          statusDiv.innerHTML = `<div class="badge" style="color: var(--accent-red);"><span class="badge-dot red"></span> Upload failed: ${result.error}</div>`;
+        }
+      } catch (err) {
+        statusDiv.innerHTML = `<div class="badge" style="color: var(--accent-red);"><span class="badge-dot red"></span> Error: ${err.message}</div>`;
+      }
+    }
+
+    // Queue monitoring
+    async function loadQueue() {
+      try {
+        const res = await fetch('/api/queue');
+        const data = await res.json();
+        const jobs = data.jobs || [];
+        const tbody = document.getElementById('queue-body');
+        if (!jobs.length) {
+          tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Queue is currently empty. Drop files in the dropzone or via Taildrop to start jobs!</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = jobs.map(j => `
+          <tr>
+            <td class="mono">${j.id}</td>
+            <td><strong>${j.data?.originalFileName || 'File'}</strong></td>
+            <td><span class="badge ${j.status === 'completed' ? '' : j.status === 'failed' ? 'red' : 'amber'}">${j.status}</span></td>
+            <td class="mono">${j.timestamp ? new Date(j.timestamp).toLocaleTimeString() : ''}</td>
+            <td style="font-size: 0.75rem; color: var(--text-secondary);">${j.failedReason || j.progress || ''}</td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error('Failed to load queue', err);
+      }
+    }
+
+    // Archive list
+    async function loadArchive() {
+      try {
+        const res = await fetch('/api/documents');
+        const data = await res.json();
+        const docs = data.documents || [];
+        document.getElementById('ov-processed-files').innerText = docs.filter(d => d.status === 'processed').length;
+
+        const tbody = document.getElementById('archive-body');
+        if (!docs.length) {
+          tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No archived documents yet.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = docs.map(d => `
+          <tr>
+            <td><strong>${d.filename}</strong></td>
+            <td><span class="badge">${d.category || 'General'}</span></td>
+            <td class="mono">${d.date || ''}</td>
+            <td><span class="badge ${d.status === 'processed' ? '' : 'red'}">${d.status}</span></td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error('Failed to load archive', err);
+      }
+    }
+
+    // Initial load & periodic poll
+    loadStatus();
+    loadArchive();
+    setInterval(loadStatus, 15000);
+  </script>
+</body>
+</html>
