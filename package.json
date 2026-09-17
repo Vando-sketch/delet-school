@@ -1,7 +1,7 @@
 {
   "name": "delet-school",
   "version": "0.1.0",
-  "description": "Watches a local folder for manually-downloaded files (zips, PDFs, etc.), processes them with the Claude Agent SDK to find and solve open tasks, and distributes the result to Nextcloud.",
+  "description": "Automated document solving & banking pipeline with Tailscale access and web dashboard.",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,9 +11,11 @@
     "setup": "bash scripts/setup.sh",
     "dev:ingest": "tsx watch src/ingest/watcher.ts",
     "dev:worker": "tsx watch src/worker/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "dev:web": "tsx watch src/web/index.ts",
+    "build": "tsc -p tsconfig.json && mkdir -p dist/web/public && cp -r src/web/public/* dist/web/public/",
     "start:ingest": "node dist/ingest/watcher.js",
     "start:worker": "node dist/worker/index.js",
+    "start:web": "node dist/web/index.js",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
@@ -24,16 +26,22 @@
     "bullmq": "^5.12.7",
     "chokidar": "^5.0.0",
     "dotenv": "^16.4.5",
+    "express": "^5.2.1",
     "ioredis": "^5.4.1",
+    "multer": "^2.4.0",
     "pino": "^9.3.2",
     "webdav": "^5.10.0"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
     "@types/node": "^20.14.15",
+    "@types/supertest": "^6.0.3",
     "@typescript-eslint/eslint-plugin": "^8.0.1",
     "@typescript-eslint/parser": "^8.0.1",
     "eslint": "^9.9.0",
+    "supertest": "^7.2.2",
     "tsx": "^4.17.0",
     "typescript": "^5.5.4",
     "vitest": "^2.0.5"

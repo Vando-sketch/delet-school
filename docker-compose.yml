@@ -12,8 +12,13 @@ services:
       - TS_EXTRA_ARGS=--advertise-tags=tag:delet-school
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=false
+      - TS_SERVE=${TS_SERVE:-false}
+      - TS_SERVE_PORT=${WEB_PORT:-3000}
       - TAILDROP_STAGING_DIR=${TAILDROP_STAGING_DIR:-/taildrop-staging}
       - TAILDROP_POLL_INTERVAL_MS=${TAILDROP_POLL_INTERVAL_MS:-5000}
+    ports:
+      # Exposes Web Dashboard on host port 3000 (accessible on local LAN & tailnet)
+      - "${WEB_PORT:-3000}:${WEB_PORT:-3000}"
     volumes:
       - tailscale-state:/var/lib/tailscale
       - taildrop-staging:${TAILDROP_STAGING_DIR:-/taildrop-staging}
@@ -33,8 +38,6 @@ services:
     image: redis:7-alpine
     container_name: delet-school-redis
     command: redis-server --appendonly yes
-    # Shares the tailscale sidecar's network namespace (see the `ingest`/`worker` comment
-    # below) - reached at localhost:6379 from there, not via Compose's `redis` DNS name.
     network_mode: "service:tailscale"
     volumes:
       - redis-data:/data
@@ -57,19 +60,9 @@ services:
     env_file: .env
     environment:
       - NODE_ENV=production
-    # Shares the tailscale sidecar's network namespace so MagicDNS/tailnet routing works
-    # without installing or configuring Tailscale in this image directly. This also means
-    # REDIS_URL must point at localhost (see .env.example), not a Compose service name -
-    # Compose's embedded DNS isn't reachable once MagicDNS owns /etc/resolv.conf here.
     network_mode: "service:tailscale"
     volumes:
-      # Watched drop folder for manually-downloaded files (zips, PDFs, etc.).
-      # The host path (INGEST_WATCH_DIR_HOST) must contain the same files the worker sees, so it
-      # must resolve to the same INGEST_WATCH_DIR path inside both this container and `worker`
-      # below - job data passed through Redis is just a file path, not file contents.
       - "${INGEST_WATCH_DIR_HOST:-./inbox}:${INGEST_WATCH_DIR:-/app/inbox}"
-      # Taildrop's landing directory (drained by the tailscale sidecar) - the taildropDrain
-      # module in this container moves files from here into INGEST_WATCH_DIR above.
       - taildrop-staging:${TAILDROP_STAGING_DIR:-/taildrop-staging}
     depends_on:
       tailscale:
@@ -90,23 +83,28 @@ services:
     network_mode: "service:tailscale"
     volumes:
       - "${INGEST_WATCH_DIR_HOST:-./inbox}:${INGEST_WATCH_DIR:-/app/inbox}"
-      # agy's (Antigravity CLI) Google-account auth state, pre-authenticated on the host by
-      # running `agy` interactively once (not something a headless container can do itself)
-      # and mirroring that state in here - same pattern as the tailscale-state volume above,
-      # but a host bind mount (not a Docker-managed volume) since the container needs to
-      # start from state that already exists on the host, not populate it from empty.
-      # UNVERIFIED end-to-end (see docs/superpowers/specs/2026-07-24-gemini-agy-integration-design.md,
-      # "Infra changes"): whether this credential state is portable across machines/OSes
-      # (macOS Keychain-bound vs. a portable file), and whether token refresh works
-      # unattended inside the container, have not been confirmed on a real Docker host - this
-      # is the wiring the design calls for, not a verified-working setup. If `agy` prompts for
-      # login instead of authenticating from this mount, the worker still functions via the
-      # unchanged Claude Agent SDK fallback (see src/claude/processFile.ts) - it just silently
-      # never benefits from the Gemini/agy primary path until this is fixed.
-      # Required, no default: Compose does not expand `~`, so AGY_CREDENTIAL_DIR_HOST must be
-      # set in .env as an absolute path (e.g. /home/<you>/.gemini) rather than falling back
-      # to a literal "~" directory.
       - "${AGY_CREDENTIAL_DIR_HOST:?Set AGY_CREDENTIAL_DIR_HOST to an absolute host path for agy's pre-authenticated ~/.gemini dir}:/home/nodejs/.gemini"
+    depends_on:
+      tailscale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: delet-school-web
+    command: npm run start:web
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - WEB_PORT=${WEB_PORT:-3000}
+    network_mode: "service:tailscale"
+    volumes:
+      - "${INGEST_WATCH_DIR_HOST:-./inbox}:${INGEST_WATCH_DIR:-/app/inbox}"
+      - banking-data:/app/data/banking
     depends_on:
       tailscale:
         condition: service_healthy
@@ -120,4 +118,6 @@ volumes:
   tailscale-state:
     driver: local
   taildrop-staging:
+    driver: local
+  banking-data:
     driver: local

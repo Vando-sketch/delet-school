@@ -11,6 +11,13 @@ until tailscale status >/dev/null 2>&1; do
   sleep 1
 done
 
+# Enable Tailscale Serve (HTTPS termination for the web dashboard on your tailnet) if enabled
+if [ "${TS_SERVE:-false}" = "true" ]; then
+  SERVE_PORT="${TS_SERVE_PORT:-3000}"
+  echo "Enabling Tailscale Serve reverse proxy for port $SERVE_PORT..."
+  tailscale serve --bg "$SERVE_PORT" || true
+fi
+
 STAGING_DIR="${TAILDROP_STAGING_DIR:-/taildrop-staging}"
 POLL_INTERVAL_MS="${TAILDROP_POLL_INTERVAL_MS:-5000}"
 mkdir -p "$STAGING_DIR"
