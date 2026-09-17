@@ -11,10 +11,10 @@ subject.
 You, manually: download/export files from Teams (zip, PDF, ...)
         │
         ▼
-Send with Taildrop, to this app's tailnet device (or upload via Web Dashboard)
+Send with Taildrop, to this app's tailnet device
         │
         ▼
-Tailscale sidecar drains Taildrop / Web dropzone into __INBOX__
+Tailscale sidecar drains the Taildrop queue into __INBOX__
         │
         ▼
 Ingest watcher ── extracts zips (one job per contained file), enqueues each file
@@ -54,22 +54,17 @@ Worker
   WebDAV.
 - `src/ingest/taildropDrain.ts` — moves files the Tailscale sidecar drains from Taildrop into
   the watched inbox directory.
-- `src/banking/` & `scripts/fints_client.py` — automated FinTS 3.0 / HBCI banking client; syncs balances,
-  transactions, and PDF electronic account statements (`Kontoauszüge`) with German/EU banks, supporting
-  2FA/TAN challenge workflows and auto-ingesting statements into the pipeline.
-- `src/web/` — lightweight responsive web dashboard accessible over Tailscale (`http://delet-school:3000`
-  or Tailscale Serve HTTPS); provides bank overview, file dropzone upload, queue monitoring, and document history.
 - `src/worker/` — wires the above together: read from disk → process → write → archive, one
   BullMQ `Worker` consuming the queue.
-- `docker/`, `docker-compose.yml` — containerized ingest watcher + worker + web dashboard + Redis + a Tailscale
-  sidecar; access from anywhere across your tailnet. See [Home Server Deployment Guide](docs/home-server-deployment.md).
+- `docker/`, `docker-compose.yml` — containerized ingest watcher + worker + Redis + a Tailscale
+  sidecar; no Nextcloud filesystem access needed, only a WebDAV connection over the tailnet.
 
 ## Setup
 
 One command installs everything needed to run outside Docker: system PDF/OCR toolchain
 (`poppler-utils`, `ocrmypdf`, `tesseract-ocr` + language packs, `pandoc`, `hunspell`
 dictionaries — via `apt-get`/`dnf`/`brew`, whichever is found), the `tailscale` client, a Python
-venv with `markitdown`+`weasyprint`+`fints`, npm dependencies, the `claude` CLI, and the `agy` CLI
+venv with `markitdown`+`weasyprint`, npm dependencies, the `claude` CLI, and the `agy` CLI
 (installed only if not already on `PATH`; prompts for `sudo` for system packages, including the
 global npm installs). Safe to re-run. Also scaffolds `.env` from `.env.example` if it doesn't
 exist yet. Logs to both the terminal and `setup.log`.
@@ -87,27 +82,27 @@ is still required separately (`REDIS_URL`, defaults to `redis://localhost:6379`)
 setup` doesn't install or start one.
 
 ```bash
-# edit .env (created by npm run setup) - fill in Nextcloud/Tailscale/Banking values, see below
+# edit .env (created by npm run setup) - fill in Nextcloud/Tailscale values, see below
 npm run dev:ingest     # local folder watcher
 npm run dev:worker     # local worker
-npm run dev:web        # local web dashboard (http://localhost:3000)
 ```
 
 `STUDENT_NAME` and `STUDENT_CLASS` are required and used to personalize solution output. `SUBJECTS` and `OUTPUT_LANGUAGE` are also configurable (see `.env.example` for format). Binary paths for the PDF/OCR toolchain (`PDFTOTEXT_BIN`, `PDFTOPPM_BIN`, `PDFINFO_BIN`, `OCRMYPDF_BIN`, `PANDOC_BIN`, `HUNSPELL_DE_DIC_PATH`, `HUNSPELL_EN_DIC_PATH`, `MARKITDOWN_BIN`, `WEASYPRINT_BIN`) are all overridable in `.env` if `npm run setup` installed them somewhere non-standard, or you installed them manually.
 
 `INGEST_WATCH_DIR` defaults to `__INBOX__` in the root of the project directory - files land
-there via the Tailscale sidecar draining Taildrop sends into it (see below), or via direct web dashboard upload, so it doesn't need to be synced with anything.
+there via the Tailscale sidecar draining Taildrop sends into it (see below), so it doesn't need
+to be synced with anything.
 
 To get files in: from Teams/SharePoint, use "Download" on individual files, or "Download as
 zip" on a folder of files; then, on a device with Tailscale installed, send the result with
-Taildrop to this app's tailnet device (`TS_HOSTNAME`), or drag and drop onto the Web Dashboard at `http://delet-school:3000`. Zip archives are extracted automatically
+Taildrop to this app's tailnet device (`TS_HOSTNAME`). Zip archives are extracted automatically
 and every file inside is processed individually; everything else (PDF, .txt, .md, ...) is
 processed as-is.
 
 Nextcloud itself only needs to be reachable over HTTPS on the tailnet (its normal web server,
 at its Tailscale MagicDNS hostname) - see `.env.example` for the `NEXTCLOUD_*` and `TS_*`
 variables, and `docker/tailscale/` for the sidecar that provides tailnet connectivity to the
-`ingest`/`worker`/`redis`/`web` containers. Outside Docker, `npm run setup` installs the `tailscale`
+`ingest`/`worker`/`redis` containers. Outside Docker, `npm run setup` installs the `tailscale`
 client but doesn't join a tailnet — run `tailscale up` yourself (interactive browser auth, or
 `tailscale up --authkey=...`) before `NEXTCLOUD_BASE_URL` will be reachable. See "Known open
 items" below for what Taildrop delivery does (and doesn't) do outside Docker.
@@ -128,14 +123,10 @@ pre-authenticated `~/.gemini` directory mounted into the worker container
 on macOS) — if `agy` doesn't work in your container, the worker still functions via the Claude
 fallback, just without the Gemini primary path.
 
-## Banking & Home Server Deployment
-
-Detailed step-by-step instructions for running this stack on a home server, accessing it securely from anywhere via Tailscale, and connecting to German/EU bank accounts (DKB, Sparkasse, ING, Commerzbank, etc.) are available in [docs/home-server-deployment.md](docs/home-server-deployment.md).
-
 ## Docker
 
 The intended production path is `docker-compose.yml`: `tailscale` (joins the tailnet, drains
-Taildrop), `redis`, `ingest`, `worker`, and `web` — all backend services share `tailscale`'s network
+Taildrop), `redis`, `ingest`, and `worker` — `ingest`/`redis` share `tailscale`'s network
 namespace (`network_mode: service:tailscale`), so `REDIS_URL` must stay `redis://localhost:6379`
 in Docker too, not a Compose service name.
 
@@ -153,14 +144,13 @@ Beyond the vars covered above, Docker-only requirements in `.env`:
   `agy` interactively on the host once, mounted read-write into the worker container so it can
   authenticate headlessly. Required, no default (Compose doesn't expand `~`). See the
   end-to-end-unverified caveat above.
-- `INGEST_WATCH_DIR_HOST` — host path for the watched inbox folder, bind-mounted into `ingest`,
-  `worker`, and `web` (must resolve to the same `INGEST_WATCH_DIR` inside each container).
+- `INGEST_WATCH_DIR_HOST` — host path for the watched inbox folder, bind-mounted into both
+  `ingest` and `worker` (must resolve to the same `INGEST_WATCH_DIR` inside each container).
 
 ## Commands
 
 - `npm run typecheck` / `npm run lint` / `npm test` — must all pass before opening a PR (see `CLAUDE.md`).
-- `npm run build` — compiles TypeScript and copies frontend assets to `dist/`.
-- `npm run dev:web` / `npm run start:web` — starts the web dashboard server.
+- `npm run build` — compiles to `dist/`.
 
 ## Known open items
 
