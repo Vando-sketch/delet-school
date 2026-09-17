@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command setup: system PDF/OCR toolchain, Python venv (markitdown+weasyprint+fints), npm
+# One-command setup: system PDF/OCR toolchain, Python venv (markitdown+weasyprint), npm
 # dependencies, the Claude Code CLI, and the agy (Antigravity) CLI.
 #
 # Usage: ./scripts/setup.sh   (or: npm run setup)
@@ -16,8 +16,7 @@ LOG_FILE="$REPO_ROOT/setup.log"
 
 log() {
   local timestamp
-  timestamp="$(date '+%Y-%m-%d %H:%M:%S')
-"
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
   echo "[$timestamp] $*" | tee -a "$LOG_FILE"
 }
 
@@ -115,8 +114,8 @@ log "Also: outside Docker there is no Taildrop delivery path at all. The 'tailsc
   "instead of relying on Taildrop, or run 'watch -n5 tailscale file get \$TAILDROP_STAGING_DIR'" \
   "yourself to replicate the sidecar's loop."
 
-# --- 2. Python venv for markitdown + weasyprint + FinTS banking ----------------------------
-log_step "Setting up Python venv for markitdown, weasyprint, and FinTS banking"
+# --- 2. Python venv for markitdown + weasyprint ------------------------------------------
+log_step "Setting up Python venv for markitdown + weasyprint"
 
 if [ ! -x "$REPO_ROOT/.venv/bin/python" ]; then
   run_logged python3 -m venv "$REPO_ROOT/.venv"
@@ -124,8 +123,8 @@ else
   log ".venv already exists, skipping venv creation"
 fi
 run_logged "$REPO_ROOT/.venv/bin/pip" install --quiet --upgrade pip
-run_logged "$REPO_ROOT/.venv/bin/pip" install --quiet markitdown weasyprint fints mt-940 sepaxml requests
-log "Python tools installed at .venv/bin/ (markitdown, weasyprint, fints)"
+run_logged "$REPO_ROOT/.venv/bin/pip" install --quiet markitdown weasyprint
+log "markitdown/weasyprint installed at .venv/bin/ (matches MARKITDOWN_BIN/WEASYPRINT_BIN defaults in .env.example)"
 
 # --- 3. Node dependencies ------------------------------------------------------------------
 log_step "Installing npm dependencies"
@@ -179,5 +178,4 @@ log "  1. Edit .env (see README.md 'Setup' for what's required)."
 log "  2. Authenticate: 'claude login' and/or 'agy' (interactive login on first run)."
 log "  3. npm run dev:ingest   # in one terminal"
 log "     npm run dev:worker   # in another"
-log "     npm run dev:web      # in a third for dashboard"
 log "Full log written to $LOG_FILE"
